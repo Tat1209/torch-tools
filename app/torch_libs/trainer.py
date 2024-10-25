@@ -520,6 +520,9 @@ class MultiTrain(TrainerUtils):
             return return_l
 
         return wrapper
+    
+    def __getitem__(self, idx):
+        return self.models[idx]
 
 
 class MyMultiTrain(TrainerUtils):
@@ -620,3 +623,6 @@ class MyMultiTrain(TrainerUtils):
             return return_l
 
         return wrapper
+
+    def __getitem__(self, idx):
+        return self.models[idx]

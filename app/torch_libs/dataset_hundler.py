@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 
 from torchvision.models import resnet50, ResNet50_Weights
-from umap import UMAP
+# from umap import UMAP
 import matplotlib.pyplot as plt
 
 from trainer import Trainer

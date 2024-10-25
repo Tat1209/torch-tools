@@ -219,43 +219,57 @@ class RunViewer:
     def write_results(self, df, fname="results.csv"):
         df.write_csv(str(self.exp_path / Path(fname)))
         
-    def ref_results(self, fname="results.csv"):
-        run_ids, stats_paths = self.fetch_files("stats.csv")
+    # def read_results(self, fname="results.csv", infer_schema_length=200):
+    #     df = pl.read_csv(str(self.exp_path / Path(fname)), infer_schema_length=infer_schema_length)
+
+    #     return df
+
+    def fetch_results(self, fname="results.csv", refresh=False, met_listed=True):
+        run_ids, params_paths = self.fetch_files("params.csv")
+        run_ids, metrics_paths = self.fetch_files("metrics.csv")
 
         stats_l = []
-        for run_id, stats_path in zip(run_ids, stats_paths):
+        for run_id, params_path, metrics_path in zip(run_ids, params_paths, metrics_paths):
+            df_run = pl.DataFrame({"run_id": run_id})
             try:
-                df_stats = pl.read_csv(stats_path)
-                df_id = pl.DataFrame({"run_id": run_id})
-                df_stats_wid = df_id.hstack(df_stats)
-                stats_l.append(df_stats_wid)
+                df_params = pl.read_csv(params_path)
+                df_run = df_run.hstack(df_params)
             except FileNotFoundError:
                 pass
-            except NoDataError:
-                print(stats_path)
+            try:
+                df_metrics = pl.read_csv(metrics_path)
+                df_metrics_list = df_metrics.select(pl.all().implode())
+                df_run = df_run.hstack(df_metrics_list)
+            except FileNotFoundError:
                 pass
+            # except NoDataError:
+            #     print(f"No Data: {params_path}")
+            #     pass
+            
+            stats_l.append(df_run)
+            
         df = pl.concat(stats_l, how="diagonal_relaxed").sort(pl.col("run_id"))
-        self.write_results(df, fname)
+        
+        if refresh  or  not met_listed:
+            df = df.with_columns(pl.col([col for col, dtype in df.schema.items() if dtype.is_nested()]).list.last().name.keep()) 
 
-        return df
-    
-    def read_results(self, fname="results.csv", infer_schema_length=200):
-        df = pl.read_csv(str(self.exp_path / Path(fname)), infer_schema_length=infer_schema_length)
-
-        return df
-
-    def fetch_results(self, fname="results.csv", refresh=True):
-        if refresh:
-            try:
-                df = self.ref_results(fname)
-            except FileNotFoundError:
-                df = self.read_results(fname)
-        else:
-            df = self.read_results(fname)
+            if refresh:
+                self.write_results(df, fname)
 
         return df
 
-    def fetch_metrics(self, listed=False):
+    # def fetch_results(self, fname="results.csv", refresh=True, met_listed=False):
+    #     if refresh:
+    #         try:
+    #             df = self.ref_results(fname)
+    #         except FileNotFoundError:
+    #             df = self.read_results(fname)
+    #     else:
+    #         df = self.read_results(fname)
+
+    #     return df
+
+    def _fetch_metrics(self, listed=False):
         run_ids, stats_paths = self.fetch_files("metrics.csv")
 
         stats_l = []

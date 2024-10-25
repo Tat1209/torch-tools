@@ -1,0 +1,2 @@
+step,lr,epoch,train_loss,train_acc,val_loss,val_acc
+1,0.005,1,0.30026188236872353,0.3582,0.33864590196609495,0.379

@@ -33,9 +33,9 @@ base_epochs = 0
 # base_epochs = 100
 train_ds_str_l = ["cifar10_train"]
 val_ds_str_l = ["cifar10_val"]
-ndata_l = [10000]
+ndata_l = [500]
 
-base_fils = 32
+base_fils = 16
 
 for train_ds_str, val_ds_str in zip(train_ds_str_l, val_ds_str_l):
     # train_trans = [transforms.Resize((32, 32)), transforms.ToTensor(), transforms.RandomHorizontalFlip(p=0.5), transforms.RandomRotation(degrees=(0, 360))]
@@ -56,8 +56,8 @@ for train_ds_str, val_ds_str in zip(train_ds_str_l, val_ds_str_l):
             break
         # train_ds = train_ds.in_ratio(0.1)
 
-        for fils_l in [[1, 32]]:
-        # for fils_l in [[16, 32]]:
+        for fils_l in [[1, 2, 4, 8, 16]]:
+        # for fils_l in [[1, 2, 4, 8, 16, 32]]:
         # for fils_l in [[2 ** i for i in range(int(math.log2(base_fils)) + 1)]]:
             runs = [RunManager(exc_path=__file__, exp_name=exp_name) for _ in fils_l]
             runs_mgr = RunsManager(runs)
@@ -136,9 +136,9 @@ for train_ds_str, val_ds_str in zip(train_ds_str_l, val_ds_str_l):
 
                 feat = etrainer.fetch_feat(val_dl, flatten=True)
 
-                # for k, v in feat.items():
-                run_mgr.log_torch_save(feat, "val_feature.pt")
-                # print(feat.shape)
+                for k, v in feat.items():
+                    run_mgr.log_torch_save(feat[k], f"train_{k}.pt")
+                    print(feat[k].shape)
 
             rv = RunViewer(exc_path=__file__, exp_name=exp_name)
             rv.fetch_results(refresh=True)

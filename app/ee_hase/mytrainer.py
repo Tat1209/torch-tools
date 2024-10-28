@@ -64,7 +64,7 @@ class MyTrainer(Trainer):
         with torch.no_grad():
             for inputs, labels in dl:
                 inputs = inputs.to(self.device)
-                # labels = labels.to(self.device)
+                labels = labels.to(self.device)
 
                 outputs = self.network(inputs)
                 outputs = outputs.detach()

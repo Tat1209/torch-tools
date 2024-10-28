@@ -1,6 +1,0 @@
-表記ゆれを統一
-(Lat, lat) -> Lat
-(Lon, lon) -> Lon
-
-Stomias boa のみ先頭に空白があったため、空白を削除
-Tdat_sum.csv Black -> Scientific name

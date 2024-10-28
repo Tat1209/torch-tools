@@ -1,1 +1,0 @@
-Temperature が重複するため、Tdat_sum側のTemeratureを "TemperatureT"に変更

@@ -22,13 +22,14 @@ class MyTrainer(Trainer):
     ):
         super().__init__(network, loss_func, optimizer, scheduler_t, device)
         
-    def fetch_feat(self, dl, flatten=False):
+    def fetch_feat(self, dl, layer_list=None, flatten=False):
         self.network.eval()
         feature_maps = {}
+        hooks = []
 
         def hook_fn(name):
             def hook(module, input, output):
-                output = output.detach()
+                output = output.clone().to("cuda:3")
                 if flatten:
                     output = output.view(len(output), -1)
 
@@ -36,6 +37,8 @@ class MyTrainer(Trainer):
                     feature_maps[name] = output
                 else:
                     feature_maps[name] = torch.cat([feature_maps[name], output], dim=0)
+                    
+                # print(feature_maps[name].shape)
 
                 # print(name)
                 # print(output.shape)
@@ -44,10 +47,11 @@ class MyTrainer(Trainer):
         def register_hooks(module, parent_name="", rec=True):
             for name, layer in module.named_children():
                 full_name = f"{parent_name}.{name}" if parent_name else name
-                layer.register_forward_hook(hook_fn(full_name))  # 全てのレイヤーにフックを登録
-                
+                if layer_list is None  or  full_name in layer_list:
+                    hooks.append(layer.register_forward_hook(hook_fn(full_name)))  # 全てのレイヤーにフックを登録
+
                 if rec:
-                    register_hooks(layer, full_name, rec=False)  # 再帰的に内部モジュールにもフックを登録
+                    register_hooks(layer, full_name, rec=True)  # 再帰的に内部モジュールにもフックを登録
 
         # def register_hooks(module, parent_name=""):
         #     for name, layer in module.named_children():
@@ -65,8 +69,23 @@ class MyTrainer(Trainer):
                 outputs = self.network(inputs)
                 outputs = outputs.detach()
 
+                if "logit" in layer_list:
+                    outputs = torch.nn.functional.softmax(outputs, dim=1)
+                    if flatten:
+                        outputs = outputs.view(len(outputs), -1)
+
+                    if feature_maps.get("logit") is None:
+                        feature_maps["logit"] = outputs
+                        feature_maps["labels"] = labels
+                    else:
+                        feature_maps["logit"] = torch.cat([feature_maps["logit"], outputs], dim=0)
+                        feature_maps["labels"] = torch.cat([feature_maps["labels"], labels], dim=0)
+
                 # feat = feat.cpu()
                 # labels = labels.cpu()
+
+        for hook in hooks:
+            hook.remove() # モデル全体にフックを登録
                 
         for k, v in feature_maps.items():
             feature_maps[k] = v.cpu()

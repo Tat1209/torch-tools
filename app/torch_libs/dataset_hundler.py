@@ -676,7 +676,7 @@ class DatasetHandler(Dataset):
                 
         return all_inputs, all_labels
     
-    def loader(self, batch_size, shuffle=True, num_workers=2, pin_memory=True, **kwargs):
+    def loader(self, batch_size=128, shuffle=True, num_workers=2, pin_memory=True, **kwargs):
         if len(self) == 0:
             return None
         return DataLoader(self, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, **kwargs)

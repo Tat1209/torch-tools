@@ -1,3 +1,8 @@
+"""
+    The following implementation is rewritten based on the official implementation: 
+    https://github.com/weiaicunzai/pytorch-cifar100/blob/master/models/resnet.py
+    
+"""
 from functools import partial
 from typing import Any, Callable, List, Optional, Type, Union
 

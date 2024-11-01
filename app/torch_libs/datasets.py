@@ -112,7 +112,7 @@ class TinyImageNet(VisionDataset):
 
 class Datasets:
     def __init__(self, root=None):
-        self.root = root
+        self.root = Path(root)
 
     def _base_ds(self, ds_str):
         match (ds_str):
@@ -166,16 +166,18 @@ class Datasets:
                 raise Exception("Invalid name.")
 
     def __call__(self, ds_str, transform_l=[], target_transform_l=[], u_seed=None):
-        ds = self._base_ds(ds_str)
-        ds.ds_str = ds_str
-        ds.ds_name = ds.__class__.__name__
-        ds.access = self
-        ds.u_seed = u_seed
+        base_ds = self._base_ds(ds_str)
+        base_ds.ds_str = ds_str
+        base_ds.ds_name = base_ds.__class__.__name__
+        base_ds.u_seed = u_seed
 
-        indices = np.arange(len(ds), dtype=np.int32)
+        indices = np.arange(len(base_ds), dtype=np.int32)
         classes = None
         transform = torchvision.transforms.Compose(transform_l)
         target_transform = torchvision.transforms.Compose(target_transform_l)
-
-        return DatasetHandler(ds, indices, classes, transform, target_transform)
+        
+        dsh = DatasetHandler(base_ds, indices, classes, transform, target_transform)
+        base_ds.base_dsh = dsh
+        
+        return dsh
 

@@ -8,31 +8,30 @@ from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 
 from torchvision.models import resnet50, ResNet50_Weights
-from umap import UMAP
+# from umap import UMAP
 import matplotlib.pyplot as plt
 
 from trainer import Trainer
 
 
-# クラスの数を減らすなら、indicesのほかにclasses (ラベル名を保管しているリスト) を作ってそれも毎回コピる必要がある。その後、__getitem__のtargetを修正する必要あり
+# クラスの数を減らすなら、indicesのほかにclassinfo (ラベル名を保管しているリスト) を作ってそれも毎回コピる必要がある。その後、__getitem__のtargetを修正する必要あり
 class DatasetHandler(Dataset):
     # self.indicesは、常にnp.array(), label_l, label_dのvalueはlist
-    def __init__(self, dataset, indices, classes, transform, target_transform):
+    def __init__(self, dataset, indices, classinfo, transform, target_transform):
         self.dataset = dataset
         self.indices = indices
-        self.classes = classes
+        self.classinfo = classinfo
         self._transform = transform
         self._target_transform = target_transform
 
         self.ds_str = dataset.ds_str
         self.ds_name = dataset.ds_name
-        self._label_map = None
 
     def __getitem__(self, idx):
         data, target = self.dataset[self.indices[idx]]
 
-        if self._label_map is not None:
-            target = self._label_map[target]
+        if type(self.classinfo) is dict:
+            target = self.classinfo[target]
 
         if self._transform:
             data = self._transform(data)
@@ -47,7 +46,7 @@ class DatasetHandler(Dataset):
     def shuffle(self, seed=None):
         # データセットそのものの順序をシャッフル ただし、ロードごとにシャッフルしたいならDataLoaderでシャッフルさせるべき
         indices_new = self.indices.copy()
-        classes_new = copy(self.classes)
+        classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -61,11 +60,11 @@ class DatasetHandler(Dataset):
             np.random.seed(seed)
             np.random.shuffle(indices_new)
 
-        return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def in_ratio(self, a, b=None):
         # indices_new = self.indices.copy()
-        classes_new = copy(self.classes)
+        classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
         range_t = (a, b) if b else (0, a)
@@ -75,11 +74,11 @@ class DatasetHandler(Dataset):
         idx_range = (int(range_t[0] * data_num), int(range_t[1] * data_num))
         indices_new = np.array(self.indices[idx_range[0] : idx_range[1]], dtype=np.int32)
 
-        return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def ex_ratio(self, a, b=None):
         # indices_new = self.indices.copy()
-        classes_new = copy(self.classes)
+        classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -91,11 +90,11 @@ class DatasetHandler(Dataset):
         indices_new = list(self.indices[: idx_range[0]]) + list(self.indices[idx_range[1] :])
         indices_new = np.array(indices_new, dtype=np.int32)
 
-        return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def in_ndata(self, a, b=None):
         # indices_new = self.indices.copy()
-        classes_new = copy(self.classes)
+        classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
         range_t = (a, b) if b else (0, a)
@@ -105,11 +104,11 @@ class DatasetHandler(Dataset):
         idx_range = (range_t[0], range_t[1])
         indices_new = self.indices[idx_range[0] : idx_range[1]]
 
-        return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def ex_ndata(self, a, b=None):
         # indices_new = self.indices.copy()
-        classes_new = copy(self.classes)
+        classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -121,16 +120,16 @@ class DatasetHandler(Dataset):
         indices_new = list(self.indices[: idx_range[0]]) + list(self.indices[idx_range[1] :])
         indices_new = np.array(indices_new, dtype=np.int32)
 
-        return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
     
     def split_ratio(self, ratio, balance_label=False, seed=None):
         # indices_new = self.indices.copy()
-        classes_a_new = copy(self.classes)
+        classes_a_new = copy(self.classinfo)
         transform_a_new = copy(self._transform)
         target_transform_a_new = copy(self._target_transform)
 
         # indices_new = self.indices.copy()
-        classes_b_new = copy(self.classes)
+        classes_b_new = copy(self.classinfo)
         transform_b_new = copy(self._transform)
         target_transform_b_new = copy(self._target_transform)
 
@@ -176,36 +175,36 @@ class DatasetHandler(Dataset):
 
     def transform(self, transform_l):
         indices_new = self.indices.copy()
-        classes_new = copy(self.classes)
+        classinfo_new = copy(self.classinfo)
         # transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
         transform_new = torchvision.transforms.Compose(transform_l)
-        return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def target_transform(self, target_transform_l):
         indices_new = self.indices.copy()
-        classes_new = copy(self.classes)
+        classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         # target_transform_new = copy(self._target_transform)
 
         target_transform_new = torchvision.transforms.Compose(target_transform_l)
-        return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
 
     # classの処理がされていない
     def __add__(self, other):
         # indices_new = self.indices.copy()
-        classes_new = copy(self.classes)
+        classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
         indices_new = np.concatenate((self.indices, other.indices))
 
-        return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
     
     def limit_class(self, max_num=None, labels: list=None):
         # indices_new = self.indices.copy()
-        # classes_new = copy(self.classes)
+        # classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -217,9 +216,9 @@ class DatasetHandler(Dataset):
                 # labels = list(dict(sorted(label_d.items(), key=lambda item: len(item[1]), reverse=True)).keys())[:max_num]
             labels = sorted(list(dict(sorted(label_d.items(), key=lambda item: len(item[1]), reverse=True)[:max_num]).keys()))
             # else:
-                # return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+                # return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
         
-        classes_new = labels
+        classinfo_new = labels
         indices_new = np.array([], dtype=np.int32)
         
         for label in labels:
@@ -227,17 +226,17 @@ class DatasetHandler(Dataset):
             indices_new = np.concatenate((indices_new, indices))
         indices_new = sorted(indices_new)
         
-        self._label_map = {label: i for label, i in enumerate(classes_new)}
+        classinfo_new = {label: i for i, label in enumerate(classinfo_new)}
 
-        return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
 
 
     def balance_label(self, seed=None):
-        # len(classes)ごとに取り出したとき、常に要素の数が極力均等になるようにデータセットのincicesを構成
+        # len(classinfo)ごとに取り出したとき、常に要素の数が極力均等になるようにデータセットのincicesを構成
         # seed="arange"で、該当indeicesをクラスが若い順から順番に、indicesの小さい順でとってくる
 
         # indices_new = self.indices.copy()
-        classes_new = copy(self.classes)
+        classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -289,11 +288,11 @@ class DatasetHandler(Dataset):
             
         indices_new = np.array(indices_new, dtype=np.int32)
 
-        return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def mult_label(self, mult_dict=None, seed=None):
         # indices_new = self.indices.copy()
-        classes_new = copy(self.classes)
+        classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -315,17 +314,30 @@ class DatasetHandler(Dataset):
             np.random.seed(seed)
             np.random.shuffle(indices_new)
 
-        return DatasetHandler(self.dataset, indices_new, classes_new, transform_new, target_transform_new)
+        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
     
     def fetch_classes(self, base_classes=False, listed=False):
-        if base_classes  or  self.classes is None:
+        classes = None
+        if self.classinfo is None  or  base_classes:
             blabel_l, blabel_d = self.fetch_base_ld()
-            self.classes = list(blabel_d.keys())
-        
-        if listed:
-            return self.classes
+            
+            if self.classinfo is None:
+                self.classinfo = list(blabel_d.keys())
+
+            if base_classes:
+                classes = list(blabel_d.keys())
+            else:
+                classes = self.classinfo
         else:
-            return len(self.classes)
+            classes = self.classinfo
+            # このelseに入らない場合、必ずdictではないため、この場所でok もう一つ上の階層でもOKでそのほうがわかりやすいが、この無駄な処理が増える
+            if type(self.classinfo) is dict:
+                classes = self.classinfo.keys()
+            
+        if listed:
+            return classes
+        else:
+            return len(classes)
 
     def fetch_ld(self, output=False):
         blabel_l, blabel_d = self.fetch_base_ld()
@@ -368,7 +380,7 @@ class DatasetHandler(Dataset):
 
     def fetch_base_ld(self):
         try:
-            ld_path = self.dataset.access.root / (self.ds_str + ".ld")
+            ld_path = self.dataset.base_ds.root / (self.ds_str + ".ld")
             label_l, label_d = torch.load(ld_path, weights_only=False)
         except FileNotFoundError:
             label_l, label_d = self._save_labels()
@@ -376,20 +388,20 @@ class DatasetHandler(Dataset):
         return label_l, label_d
 
     def _save_labels(self):
-        base_dsh = self.dataset.access(self.ds_str, u_seed="arange")  # DatasetHandler().fetch_ldを使うため、一時的に作成
-        # base_ds = self.dataset.access._base_ds(ds_str)
-        label_l, label_d = base_dsh._make_ld()
+        base_ds = self.dataset.base_ds(self.ds_str, u_seed="arange")  # DatasetHandler().fetch_ldを使うため、一時的に作成
+        # base_ds = self.dataset.base_ds._base_ds(ds_str)
+        label_l, label_d = base_ds._make_ld()
 
         save_obj = (label_l, label_d)
-        ld_path = self.dataset.access.root / (self.ds_str + ".ld")
-        torch.save(save_obj, ld_path)
-        print(f"Saved label data to the following path: {ld_path}")
+        obj_path = self.dataset.base_ds.root / (self.ds_str + ".ld")
+        torch.save(save_obj, obj_path)
+        print(f"Saved label data to the following path: {obj_path}")
 
         return label_l, label_d
 
     def _make_ld(self):
         # fetch_ldほぼ同じだが、ところどころ違うので別で定義した方が楽そう
-        # base_dsh = self.dataset.access(self.ds_str, seed="arange")  # base_dshインスタンスを作成し、selfで呼び出すことを前提
+        # base_ds = self.dataset.base_ds(self.ds_str, seed="arange")  # base_dsインスタンスを作成し、selfで呼び出すことを前提
 
         label_l = []  # label のリストを作成
         label_d = dict()  # index と対応させ、label を key とし、index を item とした dict を作成
@@ -404,6 +416,139 @@ class DatasetHandler(Dataset):
         label_d = dict(sorted(label_d.items()))
 
         return label_l, label_d
+    
+
+    def calc_classdist(self, plot=False, algorithm=0):
+        labels, mapping = self.fetch_base_mapping()
+
+        if plot:
+            color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+            fig = plt.figure( figsize=(8,8) )
+            ax = fig.add_subplot(1, 1, 1)
+            i = 0
+
+        points = []
+        for class_label in self.fetch_classes(listed=True):
+            class_mask = labels == class_label
+            x = mapping[class_mask, 0]
+            y = mapping[class_mask, 1]
+
+            class_center = np.array([x.mean(), y.mean()])
+            points.append(class_center)
+
+            if plot:
+                c = i % len(color_cycle)
+                ax.scatter(x, y, color=color_cycle[c], label=f'Class {class_label}', alpha=0.25, s=4)
+                ax.scatter(x=class_center[0], y=class_center[1], color=color_cycle[c], marker="*", s=125)
+                i += 1
+
+        points = np.stack(points)
+
+        distance_matrix = np.sqrt(((points[:, np.newaxis, :] - points[np.newaxis, :, :]) ** 2).sum(axis=-1))
+
+        if algorithm == 0:
+            distance = distance_matrix.mean()
+
+        elif algorithm == 1:
+            distance = np.sqrt(distance_matrix).mean()
+
+        elif algorithm == 2:
+            mask = ~np.eye(distance_matrix.shape[0], dtype=bool)
+            tmp_mat = distance_matrix[mask].reshape(distance_matrix.shape[0], -1)
+            distance = tmp_mat.min(axis=1).mean()
+
+        if plot:
+            ax.set_title(f"class_dist: {distance}")
+            ax.legend()
+            fig.show()
+        
+        return distance
+
+    def fetch_base_mapping(self):
+        try:
+            ld_path = self.dataset.base_ds.root / (self.ds_str + ".map")
+            labels, mapping = torch.load(ld_path, weights_only=False)
+        except FileNotFoundError:
+            labels, mapping = self._save_mapping()
+
+        return labels, mapping
+
+    def _save_mapping(self):
+        base_ds = self.dataset.base_ds(self.ds_str)  # DatasetHandler().fetch_ldを使うため、一時的に作成
+        labels, mapping = base_ds._make_mapping()
+
+        save_obj = (labels, mapping)
+        obj_path = self.dataset.base_ds.root / (self.ds_str + ".map")
+        torch.save(save_obj, obj_path)
+        print(f"Saved distance metrix to the following path: {obj_path}")
+
+        return labels, mapping
+
+    def _make_mapping(self, transform_l=None, batch_size=256, feat_extracter=None, dim_reducer_f=None, plot=False):
+        if transform_l is None:
+            transform_l = [torchvision.transforms.Lambda(lambda image: image.convert("RGB")), torchvision.transforms.ToTensor(), torchvision.transforms.Resize((224, 224), antialias=True)]
+
+        tmp_ds = self.transform(transform_l=transform_l)
+        tmp_dl = tmp_ds.loader(batch_size)
+
+        if feat_extracter is None:
+            transform_l.append(torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=True))
+            base_arc = resnet50(weights=ResNet50_Weights.DEFAULT)
+            feat_extracter = torch.nn.Sequential(*list(base_arc.children())[:-1])
+            
+        if dim_reducer_f is None:
+            dim_reducer_f = UMAP(n_neighbors=50, min_dist=0.1).fit_transform
+
+        trainer = Trainer(network=feat_extracter)
+
+        feat, labels = trainer.pred_1iter(tmp_dl)
+        feat = feat.view(len(feat), -1)
+        feat = feat.cpu()
+        labels = labels.cpu()
+
+        mapping = dim_reducer_f(feat)
+
+        # if plot:
+        #     color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+        #     fig = plt.figure( figsize=(8,8) )
+        #     ax = fig.add_subplot(1, 1, 1)
+        #     i = 0
+
+        # points = []
+        # for class_label in tmp_ds.fetch_classes(listed=True):
+        #     class_mask = labels == class_label
+        #     x = mapping[class_mask, 0]
+        #     y = mapping[class_mask, 1]
+
+        #     class_center = np.array([x.mean(), y.mean()])
+        #     points.append(class_center)
+
+        #     if plot:
+        #         c = i % len(color_cycle)
+        #         ax.scatter(x, y, color=color_cycle[c], label=f'Class {class_label}', alpha=0.25, s=4)
+        #         ax.scatter(x=class_center[0], y=class_center[1], color=color_cycle[c], marker="*", s=125)
+        #         i += 1
+
+        # points = np.stack(points)
+
+        # distance_matrix = np.sqrt(((points[:, np.newaxis, :] - points[np.newaxis, :, :]) ** 2).sum(axis=-1))
+
+        # distance = distance_matrix.mean()
+
+        # distance = np.sqrt(distance_matrix).mean()
+
+        # mask = ~np.eye(distance_matrix.shape[0], dtype=bool)
+        # tmp_mat = distance_matrix[mask].reshape(distance_matrix.shape[0], -1)
+        # distance = tmp_mat.min(axis=1).mean()
+
+        # if plot:
+            # ax.set_title(f"class_dist: {distance}")
+            # ax.legend()
+            # fig.show()
+        
+        # return distance
+
+        return labels, mapping
 
     def calc_mean_std(self, batch_size=256, formatted=False):
         elem = None
@@ -448,71 +593,72 @@ class DatasetHandler(Dataset):
             return f"transforms.Normalize(min={min}, max={max}, inplace=True)"
         else:
             return {"min": min, "max": max}
-        
-    def calc_classdist(self, transform_l=None, batch_size=256, feat_extracter=None, dim_reducer_f=None, plot=False):
-        if transform_l is None:
-            transform_l = [torchvision.transforms.Lambda(lambda image: image.convert("RGB")), torchvision.transforms.ToTensor(), torchvision.transforms.Resize((224, 224), antialias=True)]
 
-        tmp_ds = self.transform(transform_l=transform_l)
-        tmp_dl = tmp_ds.loader(batch_size)
 
-        if feat_extracter is None:
-            transform_l.append(torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=True))
-            base_arc = resnet50(weights=ResNet50_Weights.DEFAULT)
-            feat_extracter = torch.nn.Sequential(*list(base_arc.children())[:-1])
+    # def calc_classdist(self, transform_l=None, batch_size=256, feat_extracter=None, dim_reducer_f=None, plot=False):
+    #     if transform_l is None:
+    #         transform_l = [torchvision.transforms.Lambda(lambda image: image.convert("RGB")), torchvision.transforms.ToTensor(), torchvision.transforms.Resize((224, 224), antialias=True)]
+
+    #     tmp_ds = self.transform(transform_l=transform_l)
+    #     tmp_dl = tmp_ds.loader(batch_size)
+
+    #     if feat_extracter is None:
+    #         transform_l.append(torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=True))
+    #         base_arc = resnet50(weights=ResNet50_Weights.DEFAULT)
+    #         feat_extracter = torch.nn.Sequential(*list(base_arc.children())[:-1])
             
-        if dim_reducer_f is None:
-            dim_reducer_f = UMAP(n_neighbors=50, min_dist=0.1).fit_transform
+    #     if dim_reducer_f is None:
+    #         dim_reducer_f = UMAP(n_neighbors=50, min_dist=0.1).fit_transform
 
-        trainer = Trainer(network=feat_extracter)
+    #     trainer = Trainer(network=feat_extracter)
 
-        feat, labels = trainer.pred_1iter(tmp_dl)
-        feat = feat.view(len(feat), -1)
-        feat = feat.cpu()
-        labels = labels.cpu()
+    #     feat, labels = trainer.pred_1iter(tmp_dl)
+    #     feat = feat.view(len(feat), -1)
+    #     feat = feat.cpu()
+    #     labels = labels.cpu()
 
-        feat_2d = dim_reducer_f(feat)
+    #     mapping = dim_reducer_f(feat)
 
-        if plot:
-            color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
-            fig = plt.figure( figsize=(8,8) )
-            ax = fig.add_subplot(1, 1, 1)
-            i = 0
+    #     if plot:
+    #         color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    #         fig = plt.figure( figsize=(8,8) )
+    #         ax = fig.add_subplot(1, 1, 1)
+    #         i = 0
 
-        points = []
-        for class_label in tmp_ds.fetch_classes(listed=True):
-            class_mask = labels == class_label
-            x = feat_2d[class_mask, 0]
-            y = feat_2d[class_mask, 1]
+    #     points = []
+    #     for class_label in tmp_ds.fetch_classes(listed=True):
+    #         class_mask = labels == class_label
+    #         x = mapping[class_mask, 0]
+    #         y = mapping[class_mask, 1]
 
-            class_center = np.array([x.mean(), y.mean()])
-            points.append(class_center)
+    #         class_center = np.array([x.mean(), y.mean()])
+    #         points.append(class_center)
 
-            if plot:
-                c = i % len(color_cycle)
-                ax.scatter(x, y, color=color_cycle[c], label=f'Class {class_label}', alpha=0.25, s=4)
-                ax.scatter(x=class_center[0], y=class_center[1], color=color_cycle[c], marker="*", s=125)
-                i += 1
-
-
-        points = np.stack(points)
-        distance_matrix = np.sqrt(((points[:, np.newaxis, :] - points[np.newaxis, :, :]) ** 2).sum(axis=-1))
-
-        distance = distance_matrix.mean()
+    #         if plot:
+    #             c = i % len(color_cycle)
+    #             ax.scatter(x, y, color=color_cycle[c], label=f'Class {class_label}', alpha=0.25, s=4)
+    #             ax.scatter(x=class_center[0], y=class_center[1], color=color_cycle[c], marker="*", s=125)
+    #             i += 1
 
 
-        # distance = np.sqrt(distance_matrix).mean()
+    #     points = np.stack(points)
+    #     distance_matrix = np.sqrt(((points[:, np.newaxis, :] - points[np.newaxis, :, :]) ** 2).sum(axis=-1))
 
-        # mask = ~np.eye(distance_matrix.shape[0], dtype=bool)
-        # tmp_mat = distance_matrix[mask].reshape(distance_matrix.shape[0], -1)
-        # distance = tmp_mat.min(axis=1).mean()
+    #     distance = distance_matrix.mean()
 
-        if plot:
-            ax.set_title(f"class_dist: {distance}")
-            ax.legend()
-            fig.show()
+
+    #     # distance = np.sqrt(distance_matrix).mean()
+
+    #     # mask = ~np.eye(distance_matrix.shape[0], dtype=bool)
+    #     # tmp_mat = distance_matrix[mask].reshape(distance_matrix.shape[0], -1)
+    #     # distance = tmp_mat.min(axis=1).mean()
+
+    #     if plot:
+    #         ax.set_title(f"class_dist: {distance}")
+    #         ax.legend()
+    #         fig.show()
         
-        return distance
+    #     return distance
         
     def load_data(self, batch_size=256, one_dim=False):
         all_inputs = None
@@ -531,7 +677,7 @@ class DatasetHandler(Dataset):
                 
         return all_inputs, all_labels
     
-    def loader(self, batch_size, shuffle=True, num_workers=2, pin_memory=True, **kwargs):
+    def loader(self, batch_size=128, shuffle=True, num_workers=2, pin_memory=True, **kwargs):
         if len(self) == 0:
             return None
         return DataLoader(self, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, **kwargs)

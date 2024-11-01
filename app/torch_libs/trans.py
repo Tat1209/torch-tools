@@ -14,11 +14,9 @@ class Trans:
     scale_rgb = transforms.Lambda(lambda image: image / 255.0)
     permute = transforms.Lambda(lambda tsr: tsr.permute(2, 0, 1))
     
-    cf_norm = transforms.Normalize(
-        mean=[0.5070751592371323, 0.48654887331495095, 0.4409178433670343],
-        std=[0.2673342858792401, 0.2564384629170883, 0.27615047132568404],
-        inplace=True,
-    )
+    cifar10_norm = transforms.Normalize(mean=[0.4913996756076813, 0.48215848207473755, 0.44653090834617615], std=[0.24703224003314972, 0.24348513782024384, 0.26158785820007324], inplace=True)
+    cifar100_norm = transforms.Normalize(mean=[0.5070751905441284, 0.48654890060424805, 0.44091784954071045], std=[0.2673342823982239, 0.2564384639263153, 0.2761504650115967], inplace=True)
+
     in_norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=True)
     as_norm = transforms.Normalize(
         mean=[0.18503567576408386, 0.27679356932640076, 0.43360984325408936],
@@ -59,9 +57,14 @@ class Trans:
 
     tsr_l = [tsr]
 
-    cf_gen = [tsr, cf_norm]
-    cf_crop = [transforms.RandomCrop(32, padding=4, padding_mode="reflect"), transforms.RandomHorizontalFlip(), tsr, cf_norm]
-    cf_git = [transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip(), transforms.RandomRotation(15), tsr, cf_norm]
+    cifar10_gen = [tsr, cifar10_norm]
+    cifar10_crop = [transforms.RandomCrop(32, padding=4, padding_mode="reflect"), transforms.RandomHorizontalFlip(), tsr, cifar10_norm]
+    cifar10_git = [transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip(), transforms.RandomRotation(15), tsr, cifar10_norm]
+
+    cifar100_gen = [tsr, cifar10_norm]
+    cifar100_crop = [transforms.RandomCrop(32, padding=4, padding_mode="reflect"), transforms.RandomHorizontalFlip(), tsr, cifar10_norm]
+    cifar100_git = [transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip(), transforms.RandomRotation(15), tsr, cifar10_norm]
+
 
     stl_gen_32 = [resize(32, 32), tsr, stl_norm]
     stl_git_32 = [resize(32, 32), transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip(), transforms.RandomRotation(15), tsr, stl_norm]

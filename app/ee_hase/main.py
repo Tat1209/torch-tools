@@ -11,7 +11,9 @@ sys.path.append(torchlib_path)
 
 from datasets import Datasets
 from run_manager import RunManager, RunsManager, RunViewer
-from trainer import Trainer, MyMultiTrain
+# from trainer import Trainer, MultiTrainer
+from trainer import Trainer
+from trainer import MyMultiTrain as MultiTrainer
 from trans import Trans
 
 from mytrainer import MyTrainer
@@ -22,26 +24,28 @@ from models.gitresnet_ee import resnet18 as net
 ds = Datasets(root=work_path / "assets/datasets/")
 device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
-# exp_name = "exp_tmp"
-exp_name = "exp_shared"
+exp_name = "exp_tmp"
+# exp_name = "exp_shared"
 
-base_ndata = 10000
+base_ndata = 5000
 max_lr = 0.005
 batch_size = 128
 
-base_epochs = 200
-train_ds_str_l = ["cifar10_train"]
-val_ds_str_l = ["cifar10_val"]
-ndata_l = [10000, 2500, 1000, 500]
+base_epochs = 3
+# base_epochs = 200
+train_ds_str_l = ["stl10_train"]
+val_ds_str_l = ["stl10_val"]
+ndata_l = [5000]
+# ndata_l = [10000, 2500, 1000, 500]
 
 base_fils = 32
 
 for train_ds_str, val_ds_str in zip(train_ds_str_l, val_ds_str_l):
-    # train_trans = [transforms.Resize((32, 32)), transforms.ToTensor(), transforms.RandomHorizontalFlip(p=0.5), transforms.RandomRotation(degrees=(0, 360))]
-    # val_trans = [transforms.Resize((32, 32)), transforms.ToTensor()]
+    train_trans = [transforms.ToTensor(), transforms.RandomHorizontalFlip(p=0.5), transforms.RandomRotation(degrees=(0, 360))]
+    val_trans = [transforms.ToTensor()]
 
-    train_trans = Trans.cf_git
-    val_trans = Trans.cf_gen
+    # train_trans = Trans.cf_git
+    # val_trans = Trans.cf_gen
 
     base_train_ds = ds(train_ds_str, train_trans).balance_label(seed=0)
     val_ds = ds(val_ds_str, val_trans)
@@ -55,7 +59,7 @@ for train_ds_str, val_ds_str in zip(train_ds_str_l, val_ds_str_l):
             break
         # train_ds = train_ds.in_ratio(0.1)
 
-        for fils_l in [[1, 32]]:
+        for fils_l in [[32]]:
         # for fils_l in [[1, 2, 4, 8, 16, 32]]:
         # for fils_l in [[2 ** i for i in range(int(math.log2(base_fils)) + 1)]]:
             runs = [RunManager(exc_path=__file__, exp_name=exp_name) for _ in fils_l]
@@ -97,7 +101,7 @@ for train_ds_str, val_ds_str in zip(train_ds_str_l, val_ds_str_l):
 
                 trainer = Trainer(network, loss_func, optimizer, scheduler_t, device)
                 trainers.append(trainer)
-            mtrainer = MyMultiTrain(trainers, device)
+            mtrainer = MultiTrainer(trainers, device)
 
             runs_mgr.log_param("params", mtrainer.count_params())
             hp_dict = {
@@ -125,7 +129,7 @@ for train_ds_str, val_ds_str in zip(train_ds_str_l, val_ds_str_l):
 
 
                 runs_mgr.log_metrics(met_dict, step=e + 1)
-                mtrainer.printlog(met_dict, e + 1, epochs, itv=epochs / 4)
+                mtrainer.printmet(met_dict, e + 1, epochs, itv=epochs / 4)
                 runs_mgr.ref_stats(itv=5, step=e + 1, last_step=epochs)
 
             runs_mgr.log_torch_save(mtrainer.get_sd(), "state_dict.pt")

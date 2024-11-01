@@ -17,18 +17,18 @@ from trainer import Trainer
 # クラスの数を減らすなら、indicesのほかにclassinfo (ラベル名を保管しているリスト) を作ってそれも毎回コピる必要がある。その後、__getitem__のtargetを修正する必要あり
 class DatasetHandler(Dataset):
     # self.indicesは、常にnp.array(), label_l, label_dのvalueはlist
-    def __init__(self, dataset, indices, classinfo, transform, target_transform):
-        self.dataset = dataset
+    def __init__(self, base_ds, indices, classinfo, transform, target_transform):
+        self.base_ds = base_ds
         self.indices = indices
         self.classinfo = classinfo
         self._transform = transform
         self._target_transform = target_transform
 
-        self.ds_str = dataset.ds_str
-        self.ds_name = dataset.ds_name
+        self.ds_str = base_ds.ds_str
+        self.ds_name = base_ds.ds_name
 
     def __getitem__(self, idx):
-        data, target = self.dataset[self.indices[idx]]
+        data, target = self.base_ds[self.indices[idx]]
 
         if type(self.classinfo) is dict:
             target = self.classinfo[target]
@@ -50,7 +50,7 @@ class DatasetHandler(Dataset):
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
-        tmp = self.dataset.u_seed
+        tmp = self.base_ds.u_seed
         if tmp is not None:
             seed = tmp
 
@@ -60,7 +60,7 @@ class DatasetHandler(Dataset):
             np.random.seed(seed)
             np.random.shuffle(indices_new)
 
-        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def in_ratio(self, a, b=None):
         # indices_new = self.indices.copy()
@@ -74,7 +74,7 @@ class DatasetHandler(Dataset):
         idx_range = (int(range_t[0] * data_num), int(range_t[1] * data_num))
         indices_new = np.array(self.indices[idx_range[0] : idx_range[1]], dtype=np.int32)
 
-        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def ex_ratio(self, a, b=None):
         # indices_new = self.indices.copy()
@@ -90,7 +90,7 @@ class DatasetHandler(Dataset):
         indices_new = list(self.indices[: idx_range[0]]) + list(self.indices[idx_range[1] :])
         indices_new = np.array(indices_new, dtype=np.int32)
 
-        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def in_ndata(self, a, b=None):
         # indices_new = self.indices.copy()
@@ -104,7 +104,7 @@ class DatasetHandler(Dataset):
         idx_range = (range_t[0], range_t[1])
         indices_new = self.indices[idx_range[0] : idx_range[1]]
 
-        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def ex_ndata(self, a, b=None):
         # indices_new = self.indices.copy()
@@ -120,7 +120,7 @@ class DatasetHandler(Dataset):
         indices_new = list(self.indices[: idx_range[0]]) + list(self.indices[idx_range[1] :])
         indices_new = np.array(indices_new, dtype=np.int32)
 
-        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
     
     def split_ratio(self, ratio, balance_label=False, seed=None):
         # indices_new = self.indices.copy()
@@ -168,8 +168,8 @@ class DatasetHandler(Dataset):
             indices_a_new = indices_new[: int(length * ratio)]
             indices_b_new = indices_new[int(length * ratio) :]
 
-        a = DatasetHandler(self.dataset, indices_a_new, classes_a_new, transform_a_new, target_transform_a_new)
-        b = DatasetHandler(self.dataset, indices_b_new, classes_b_new, transform_b_new, target_transform_b_new)
+        a = DatasetHandler(self.base_ds, indices_a_new, classes_a_new, transform_a_new, target_transform_a_new)
+        b = DatasetHandler(self.base_ds, indices_b_new, classes_b_new, transform_b_new, target_transform_b_new)
 
         return a, b
 
@@ -180,7 +180,7 @@ class DatasetHandler(Dataset):
         target_transform_new = copy(self._target_transform)
 
         transform_new = torchvision.transforms.Compose(transform_l)
-        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def target_transform(self, target_transform_l):
         indices_new = self.indices.copy()
@@ -189,7 +189,7 @@ class DatasetHandler(Dataset):
         # target_transform_new = copy(self._target_transform)
 
         target_transform_new = torchvision.transforms.Compose(target_transform_l)
-        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
     # classの処理がされていない
     def __add__(self, other):
@@ -200,7 +200,7 @@ class DatasetHandler(Dataset):
 
         indices_new = np.concatenate((self.indices, other.indices))
 
-        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
     
     def limit_class(self, max_num=None, labels: list=None):
         # indices_new = self.indices.copy()
@@ -216,7 +216,7 @@ class DatasetHandler(Dataset):
                 # labels = list(dict(sorted(label_d.items(), key=lambda item: len(item[1]), reverse=True)).keys())[:max_num]
             labels = sorted(list(dict(sorted(label_d.items(), key=lambda item: len(item[1]), reverse=True)[:max_num]).keys()))
             # else:
-                # return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+                # return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
         
         classinfo_new = labels
         indices_new = np.array([], dtype=np.int32)
@@ -228,7 +228,7 @@ class DatasetHandler(Dataset):
         
         classinfo_new = {label: i for i, label in enumerate(classinfo_new)}
 
-        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
 
     def balance_label(self, seed=None):
@@ -240,7 +240,7 @@ class DatasetHandler(Dataset):
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
-        tmp = self.dataset.u_seed
+        tmp = self.base_ds.u_seed
         if tmp is not None:
             seed = tmp
 
@@ -288,7 +288,7 @@ class DatasetHandler(Dataset):
             
         indices_new = np.array(indices_new, dtype=np.int32)
 
-        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def mult_label(self, mult_dict=None, seed=None):
         # indices_new = self.indices.copy()
@@ -296,7 +296,7 @@ class DatasetHandler(Dataset):
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
-        tmp = self.dataset.u_seed
+        tmp = self.base_ds.u_seed
         if tmp is not None:
             seed = tmp
 
@@ -314,17 +314,17 @@ class DatasetHandler(Dataset):
             np.random.seed(seed)
             np.random.shuffle(indices_new)
 
-        return DatasetHandler(self.dataset, indices_new, classinfo_new, transform_new, target_transform_new)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
     
-    def fetch_classes(self, base_classes=False, listed=False):
+    def fetch_classes(self, base=False, listed=False):
         classes = None
-        if self.classinfo is None  or  base_classes:
-            blabel_l, blabel_d = self.fetch_base_ld()
+        if self.classinfo is None  or  base:
+            blabel_l, blabel_d = self.fetch_base_info("ld")
             
             if self.classinfo is None:
                 self.classinfo = list(blabel_d.keys())
 
-            if base_classes:
+            if base:
                 classes = list(blabel_d.keys())
             else:
                 classes = self.classinfo
@@ -339,34 +339,41 @@ class DatasetHandler(Dataset):
         else:
             return len(classes)
 
-    def fetch_ld(self, output=False):
-        blabel_l, blabel_d = self.fetch_base_ld()
+    def fetch_ld(self, base=False, output=False):
+        """
+            base    : もとのデータセットの情報を取得
+            output  : stdoutに出力
+        """
+        blabel_l, blabel_d = self.fetch_base_info("ld")
+        if base:
+            return blabel_l, blabel_d
+        
+        else:
+            label_l = []  # label のリストを作成
 
-        label_l = []  # label のリストを作成
+            # index と対応させ、label を key とし、index を item とした dict を作成
+            label_d = {i: [] for i in self.fetch_classes(listed=True)} 
+            for idx in self.indices:
+                label = blabel_l[idx]
+                label_l.append(label)
+                label_d[label].append(idx)
 
-        # index と対応させ、label を key とし、index を item とした dict を作成
-        label_d = {i: [] for i in self.fetch_classes(listed=True)} 
-        for idx in self.indices:
-            label = blabel_l[idx]
-            label_l.append(label)
-            label_d[label].append(idx)
+            label_d = dict(sorted(label_d.items()))
 
-        label_d = dict(sorted(label_d.items()))
+            if output:
+                for label in label_d.keys():
+                    print(f"{label}: {len(label_d[label])} items")
+                print(f"total: {len(self.indices)} items")
 
-        if output:
-            for label in label_d.keys():
-                print(f"{label}: {len(label_d[label])} items")
-            print(f"total: {len(self.indices)} items")
+            return label_l, label_d
 
-        return label_l, label_d
-
-    def fetch_weight(self, base_classes=False):
+    def fetch_weight(self, base=False):
         """
         Ex.)
-        loss_func = torch.nn.CrossEntropyLoss(weight=train_ds.fetch_weight(base_classes=True).to(device))
+        loss_func = torch.nn.CrossEntropyLoss(weight=train_ds.fetch_weight(base=True).to(device))
         """
         label_l, label_d = self.fetch_ld()
-        if base_classes:
+        if base:
             blabel_l, blabel_d = self.fetch_base_ld()
             classes = max(blabel_d.keys()) + 1
 
@@ -377,48 +384,32 @@ class DatasetHandler(Dataset):
         weight_tsr = torch.tensor(label_count_iv, dtype=torch.float) / sum(label_count_iv) * classes
         
         return weight_tsr
+    
+    def fetch_base_info(self, info):
+        expected = ("ld", "map", "mean_std")
+        assert info in expected, f"Invalid argument. Expected one of: {', '.join(expected)}."
 
-    def fetch_base_ld(self):
-        try:
-            ld_path = self.dataset.access.root / (self.ds_str + ".ld")
-            label_l, label_d = torch.load(ld_path, weights_only=False)
-        except FileNotFoundError:
-            label_l, label_d = self._save_labels()
+        obj_path = self.base_ds.root / (self.ds_str + "." + info)
+        info_path = self.base_ds.root / (self.ds_str + ".info")
 
-        return label_l, label_d
+        # 拡張子で検索 -> .infoの[info]を検索
+        if obj_path.exists():
+            obj = torch.load(obj_path, weights_only=False)
 
-    def _save_labels(self):
-        base_ds = self.dataset.access(self.ds_str, u_seed="arange")  # DatasetHandler().fetch_ldを使うため、一時的に作成
-        # base_ds = self.dataset.access._base_ds(ds_str)
-        label_l, label_d = base_ds._make_ld()
+        elif info_path.exists(): # 現仕様では常にelseとなる
+            info_dict = torch.load(info_path, weights_only=False)
+            obj = info_dict[info]
 
-        save_obj = (label_l, label_d)
-        obj_path = self.dataset.access.root / (self.ds_str + ".ld")
-        torch.save(save_obj, obj_path)
-        print(f"Saved label data to the following path: {obj_path}")
-
-        return label_l, label_d
-
-    def _make_ld(self):
-        # fetch_ldほぼ同じだが、ところどころ違うので別で定義した方が楽そう
-        # base_ds = self.dataset.access(self.ds_str, seed="arange")  # base_dsインスタンスを作成し、selfで呼び出すことを前提
-
-        label_l = []  # label のリストを作成
-        label_d = dict()  # index と対応させ、label を key とし、index を item とした dict を作成
-        for idx in self.indices:
-            _, label = self.dataset[idx]
-            label_l.append(label)
-            if label_d.get(label) is None:
-                label_d[label] = [idx]
-            else:
-                label_d[label].append(idx)
-
-        label_d = dict(sorted(label_d.items()))
-
-        return label_l, label_d
+        # 現仕様では.infoファイルは作成しない
+        else:
+            obj = getattr(self, f"_make_{info}")
+            torch.save(obj, obj_path)
+            print(f"Saved label data to the following path: {obj_path}")
+            
+        return obj
 
     def calc_classdist(self, plot=False, algorithm=0):
-        labels, mapping = self.fetch_base_mapping()
+        labels, mapping = self.fetch_base_info("map")
 
         if plot:
             color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
@@ -462,28 +453,59 @@ class DatasetHandler(Dataset):
             fig.show()
         
         return distance
+    
+    def normalizer(self, base=True, inplace=True):
+        ms = self.calc_mean_std(base=base)
+        mean, std = ms["mean"], ms["std"]
+        return torchvision.transforms.Normalize(mean=mean, std=std, inplace=inplace)
 
-    def fetch_base_mapping(self):
-        try:
-            ld_path = self.dataset.access.root / (self.ds_str + ".map")
-            labels, mapping = torch.load(ld_path, weights_only=False)
-        except FileNotFoundError:
-            labels, mapping = self._save_mapping()
+    def calc_mean_std(self, base=False, batch_size=256, formatted=False):
+        if base:
+            return self.fetch_base_info("ms")
+        elem = None
+        for inputs, _ in self.loader(batch_size, shuffle=False):
+            # p は、バッチの次元を除いたものが2次元データなら(1, 0, 2, 3)、1次元データなら(1, 0, 2)
+            p = torch.arange(len(inputs.shape))
+            p[0], p[1] = 1, 0
+            p = tuple(p)
 
-        return labels, mapping
+            elem_b = inputs.permute(p).reshape(inputs.shape[1], -1)
+            if elem is None:
+                elem = elem_b
+            else:
+                elem = torch.cat([elem, elem_b], dim=1)
 
-    def _save_mapping(self):
-        base_ds = self.dataset.access(self.ds_str)  # DatasetHandler().fetch_ldを使うため、一時的に作成
-        labels, mapping = base_ds._make_mapping()
+        mean = elem.mean(dim=1).tolist()
+        std = elem.std(dim=1).tolist()
 
-        save_obj = (labels, mapping)
-        obj_path = self.dataset.access.root / (self.ds_str + ".map")
-        torch.save(save_obj, obj_path)
-        print(f"Saved distance metrix to the following path: {obj_path}")
+        if formatted:
+            return f"transforms.Normalize(mean={mean}, std={std}, inplace=True)"
+        else:
+            return {"mean": mean, "std": std}
 
-        return labels, mapping
+    def calc_min_max(self, batch_size=256, formatted=False):
+        elem = None
+        for inputs, _ in self.loader(batch_size, shuffle=False):
+            # p は、バッチの次元を除いたものが2次元データなら(1, 0, 2, 3)、1次元データなら(1, 0, 2)
+            p = torch.arange(len(inputs.shape))
+            p[0], p[1] = 1, 0
+            p = tuple(p)
 
-    def _make_mapping(self, transform_l=None, batch_size=256, feat_extracter=None, dim_reducer_f=None, plot=False):
+            elem_b = inputs.permute(p).reshape(inputs.shape[1], -1)
+            if elem is None:
+                elem = elem_b
+            else:
+                elem = torch.cat([elem, elem_b], dim=1)
+
+        min = elem.min(dim=1).values.tolist()
+        max = elem.max(dim=1).values.tolist()
+
+        if formatted:
+            return f"transforms.Normalize(min={min}, max={max}, inplace=True)"
+        else:
+            return {"min": min, "max": max}
+
+    def _make_map(self, transform_l=None, batch_size=256, feat_extracter=None, dim_reducer_f=None, plot=False):
         if transform_l is None:
             transform_l = [torchvision.transforms.Lambda(lambda image: image.convert("RGB")), torchvision.transforms.ToTensor(), torchvision.transforms.Resize((224, 224), antialias=True)]
 
@@ -549,49 +571,28 @@ class DatasetHandler(Dataset):
 
         return labels, mapping
 
-    def calc_mean_std(self, batch_size=256, formatted=False):
-        elem = None
-        for inputs, _ in self.loader(batch_size, shuffle=False):
-            # p は、バッチの次元を除いたものが2次元データなら(1, 0, 2, 3)、1次元データなら(1, 0, 2)
-            p = torch.arange(len(inputs.shape))
-            p[0], p[1] = 1, 0
-            p = tuple(p)
+    def _make_ld(self):
+        # fetch_ldとほぼ同じだが、ところどころ違うから別で定義した方が楽そう
 
-            elem_b = inputs.permute(p).reshape(inputs.shape[1], -1)
-            if elem is None:
-                elem = elem_b
+        label_l = []  # label のリストを作成
+        label_d = dict()  # index と対応させ、label を key とし、index を item とした dict を作成
+        for idx in self.indices:
+            _, label = self.base_ds[idx]
+            label_l.append(label)
+            if label_d.get(label) is None:
+                label_d[label] = [idx]
             else:
-                elem = torch.cat([elem, elem_b], dim=1)
+                label_d[label].append(idx)
 
-        mean = elem.mean(dim=1).tolist()
-        std = elem.std(dim=1).tolist()
+        label_d = dict(sorted(label_d.items()))
 
-        if formatted:
-            return f"transforms.Normalize(mean={mean}, std={std}, inplace=True)"
-        else:
-            return {"mean": mean, "std": std}
+        return label_l, label_d
 
-    def calc_min_max(self, batch_size=256, formatted=False):
-        elem = None
-        for inputs, _ in self.loader(batch_size, shuffle=False):
-            # p は、バッチの次元を除いたものが2次元データなら(1, 0, 2, 3)、1次元データなら(1, 0, 2)
-            p = torch.arange(len(inputs.shape))
-            p[0], p[1] = 1, 0
-            p = tuple(p)
+    def _make_ms(self):
+        ms_dict = self.base_ds.base_dsh.calc_mean_std(base=False)
+        
+        return ms_dict
 
-            elem_b = inputs.permute(p).reshape(inputs.shape[1], -1)
-            if elem is None:
-                elem = elem_b
-            else:
-                elem = torch.cat([elem, elem_b], dim=1)
-
-        min = elem.min(dim=1).values.tolist()
-        max = elem.max(dim=1).values.tolist()
-
-        if formatted:
-            return f"transforms.Normalize(min={min}, max={max}, inplace=True)"
-        else:
-            return {"min": min, "max": max}
 
 
     # def calc_classdist(self, transform_l=None, batch_size=256, feat_extracter=None, dim_reducer_f=None, plot=False):

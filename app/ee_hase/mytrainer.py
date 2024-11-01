@@ -29,7 +29,7 @@ class MyTrainer(Trainer):
 
         def hook_fn(name):
             def hook(module, input, output):
-                output = output.clone().to("cuda:3")
+                output = output.clone().to("cuda:0")
                 if flatten:
                     output = output.view(len(output), -1)
 

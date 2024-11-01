@@ -1,3 +1,9 @@
+"""
+    The following implementation is rewritten based on the official implementation:
+    https://github.com/weiaicunzai/pytorch-cifar100/blob/master/models/resnet.py
+    
+    In addition, EasyEnsemble is implemented.
+"""
 from functools import partial
 from typing import Any, Callable, List, Optional, Type, Union
 
@@ -18,9 +24,6 @@ from torchvision.models._api import register_model, Weights, WeightsEnum
 from torchvision.models._meta import _IMAGENET_CATEGORIES
 from torchvision.models._utils import _ovewrite_named_param, handle_legacy_interface
 
-
-a =[]
-a[:5]
 
 __all__ = [
         "ResNet",

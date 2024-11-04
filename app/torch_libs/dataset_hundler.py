@@ -43,53 +43,27 @@ class DatasetHandler(Dataset):
     def __len__(self):
         return len(self.indices)
 
-    def shuffle(self, seed=None):
-        # データセットそのものの順序をシャッフル ただし、ロードごとにシャッフルしたいならDataLoaderでシャッフルさせるべき
+    def loader(self, batch_size=128, shuffle=True, num_workers=2, pin_memory=True, **kwargs):
+        if len(self) == 0:
+            return None
+        return DataLoader(self, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, **kwargs)
+
+    def transform(self, transform_l):
+        indices_new = self.indices.copy()
+        classinfo_new = copy(self.classinfo)
+        # transform_new = copy(self._transform)
+        target_transform_new = copy(self._target_transform)
+
+        transform_new = torchvision.transforms.Compose(transform_l)
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
+
+    def target_transform(self, target_transform_l):
         indices_new = self.indices.copy()
         classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
-        target_transform_new = copy(self._target_transform)
+        # target_transform_new = copy(self._target_transform)
 
-        tmp = self.base_ds.u_seed
-        if tmp is not None:
-            seed = tmp
-
-        if seed != "arange":
-            if seed is not None and not isinstance(seed, int):
-                raise TypeError("Variables must be of type int, 'None', or the string 'range'.")
-            np.random.seed(seed)
-            np.random.shuffle(indices_new)
-
-        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
-
-    def in_ratio(self, a, b=None):
-        # indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
-        transform_new = copy(self._transform)
-        target_transform_new = copy(self._target_transform)
-        range_t = (a, b) if b else (0, a)
-        if isinstance(a, tuple):
-            range_t = (a[0], a[1])
-        data_num = len(self.indices)
-        idx_range = (int(range_t[0] * data_num), int(range_t[1] * data_num))
-        indices_new = np.array(self.indices[idx_range[0] : idx_range[1]], dtype=np.int32)
-
-        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
-
-    def ex_ratio(self, a, b=None):
-        # indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
-        transform_new = copy(self._transform)
-        target_transform_new = copy(self._target_transform)
-
-        range_t = (a, b) if b else (0, a)
-        if isinstance(a, tuple):
-            range_t = (a[0], a[1])
-        data_num = len(self.indices)
-        idx_range = (int(range_t[0] * data_num), int(range_t[1] * data_num))
-        indices_new = list(self.indices[: idx_range[0]]) + list(self.indices[idx_range[1] :])
-        indices_new = np.array(indices_new, dtype=np.int32)
-
+        target_transform_new = torchvision.transforms.Compose(target_transform_l)
         return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def in_ndata(self, a, b=None):
@@ -122,6 +96,36 @@ class DatasetHandler(Dataset):
 
         return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
     
+    def in_ratio(self, a, b=None):
+        # indices_new = self.indices.copy()
+        classinfo_new = copy(self.classinfo)
+        transform_new = copy(self._transform)
+        target_transform_new = copy(self._target_transform)
+        range_t = (a, b) if b else (0, a)
+        if isinstance(a, tuple):
+            range_t = (a[0], a[1])
+        data_num = len(self.indices)
+        idx_range = (int(range_t[0] * data_num), int(range_t[1] * data_num))
+        indices_new = np.array(self.indices[idx_range[0] : idx_range[1]], dtype=np.int32)
+
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
+
+    def ex_ratio(self, a, b=None):
+        # indices_new = self.indices.copy()
+        classinfo_new = copy(self.classinfo)
+        transform_new = copy(self._transform)
+        target_transform_new = copy(self._target_transform)
+
+        range_t = (a, b) if b else (0, a)
+        if isinstance(a, tuple):
+            range_t = (a[0], a[1])
+        data_num = len(self.indices)
+        idx_range = (int(range_t[0] * data_num), int(range_t[1] * data_num))
+        indices_new = list(self.indices[: idx_range[0]]) + list(self.indices[idx_range[1] :])
+        indices_new = np.array(indices_new, dtype=np.int32)
+
+        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
+
     def split_ratio(self, ratio, balance_label=False, seed=None):
         # indices_new = self.indices.copy()
         classes_a_new = copy(self.classinfo)
@@ -173,22 +177,23 @@ class DatasetHandler(Dataset):
 
         return a, b
 
-    def transform(self, transform_l):
-        indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
-        # transform_new = copy(self._transform)
-        target_transform_new = copy(self._target_transform)
-
-        transform_new = torchvision.transforms.Compose(transform_l)
-        return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
-
-    def target_transform(self, target_transform_l):
+    def shuffle(self, seed=None):
+        # データセットそのものの順序をシャッフル ただし、ロードごとにシャッフルしたいならDataLoaderでシャッフルさせるべき
         indices_new = self.indices.copy()
         classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
-        # target_transform_new = copy(self._target_transform)
+        target_transform_new = copy(self._target_transform)
 
-        target_transform_new = torchvision.transforms.Compose(target_transform_l)
+        tmp = self.base_ds.u_seed
+        if tmp is not None:
+            seed = tmp
+
+        if seed != "arange":
+            if seed is not None and not isinstance(seed, int):
+                raise TypeError("Variables must be of type int, 'None', or the string 'range'.")
+            np.random.seed(seed)
+            np.random.shuffle(indices_new)
+
         return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
     # classの処理がされていない
@@ -229,7 +234,6 @@ class DatasetHandler(Dataset):
         classinfo_new = {label: i for i, label in enumerate(classinfo_new)}
 
         return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
-
 
     def balance_label(self, seed=None):
         # len(classinfo)ごとに取り出したとき、常に要素の数が極力均等になるようにデータセットのincicesを構成
@@ -319,7 +323,7 @@ class DatasetHandler(Dataset):
     def fetch_classes(self, base=False, listed=False):
         classes = None
         if self.classinfo is None  or  base:
-            blabel_l, blabel_d = self.fetch_base_info("ld")
+            blabel_l, blabel_d = self._fetch_base_info("ld")
             
             if self.classinfo is None:
                 self.classinfo = list(blabel_d.keys())
@@ -344,7 +348,7 @@ class DatasetHandler(Dataset):
             base    : もとのデータセットの情報を取得
             output  : stdoutに出力
         """
-        blabel_l, blabel_d = self.fetch_base_info("ld")
+        blabel_l, blabel_d = self._fetch_base_info("ld")
         if base:
             return blabel_l, blabel_d
         
@@ -367,7 +371,7 @@ class DatasetHandler(Dataset):
 
             return label_l, label_d
 
-    def fetch_weight(self, base=False):
+    def fetch_classweight(self, base=False):
         """
         Ex.)
         loss_func = torch.nn.CrossEntropyLoss(weight=train_ds.fetch_weight(base=True).to(device))
@@ -385,31 +389,59 @@ class DatasetHandler(Dataset):
         
         return weight_tsr
     
-    def fetch_base_info(self, info):
-        expected = ("ld", "map", "mean_std")
-        assert info in expected, f"Invalid argument. Expected one of: {', '.join(expected)}."
+    def normalizer(self, base=True, inplace=True):
+        ms_dict = self.calc_mean_std(base=base)
+        mean, std = ms_dict["mean"], ms_dict["std"]
+        return torchvision.transforms.Normalize(mean=mean, std=std, inplace=inplace)
 
-        obj_path = self.base_ds.root / (self.ds_str + "." + info)
-        info_path = self.base_ds.root / (self.ds_str + ".info")
+    def calc_mean_std(self, base=False, batch_size=256, formatted=False):
+        if base:
+            return self._fetch_base_info("msd")
+        elem = None
+        for inputs, _ in self.loader(batch_size, shuffle=False):
+            # p は、バッチの次元を除いたものが2次元データなら(1, 0, 2, 3)、1次元データなら(1, 0, 2)
+            p = torch.arange(len(inputs.shape))
+            p[0], p[1] = 1, 0
+            p = tuple(p)
 
-        # 拡張子で検索 -> .infoの[info]を検索
-        if obj_path.exists():
-            obj = torch.load(obj_path, weights_only=False)
+            elem_b = inputs.permute(p).reshape(inputs.shape[1], -1)
+            if elem is None:
+                elem = elem_b
+            else:
+                elem = torch.cat([elem, elem_b], dim=1)
 
-        elif info_path.exists(): # 現仕様では常にelseとなる
-            info_dict = torch.load(info_path, weights_only=False)
-            obj = info_dict[info]
+        mean = elem.mean(dim=1).tolist()
+        std = elem.std(dim=1).tolist()
 
-        # 現仕様では.infoファイルは作成しない
+        if formatted:
+            return f"transforms.Normalize(mean={mean}, std={std}, inplace=True)"
         else:
-            obj = getattr(self, f"_make_{info}")
-            torch.save(obj, obj_path)
-            print(f"Saved label data to the following path: {obj_path}")
-            
-        return obj
+            return {"mean": mean, "std": std}
+
+    def calc_min_max(self, batch_size=256, formatted=False):
+        elem = None
+        for inputs, _ in self.loader(batch_size, shuffle=False):
+            # p は、バッチの次元を除いたものが2次元データなら(1, 0, 2, 3)、1次元データなら(1, 0, 2)
+            p = torch.arange(len(inputs.shape))
+            p[0], p[1] = 1, 0
+            p = tuple(p)
+
+            elem_b = inputs.permute(p).reshape(inputs.shape[1], -1)
+            if elem is None:
+                elem = elem_b
+            else:
+                elem = torch.cat([elem, elem_b], dim=1)
+
+        min = elem.min(dim=1).values.tolist()
+        max = elem.max(dim=1).values.tolist()
+
+        if formatted:
+            return f"transforms.Normalize(min={min}, max={max}, inplace=True)"
+        else:
+            return {"min": min, "max": max}
 
     def calc_classdist(self, plot=False, algorithm=0):
-        labels, mapping = self.fetch_base_info("map")
+        labels, mapping = self._fetch_base_info("map")
 
         if plot:
             color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
@@ -454,58 +486,82 @@ class DatasetHandler(Dataset):
         
         return distance
     
-    def normalizer(self, base=True, inplace=True):
-        ms = self.calc_mean_std(base=base)
-        mean, std = ms["mean"], ms["std"]
-        return torchvision.transforms.Normalize(mean=mean, std=std, inplace=inplace)
+    def load_data(self, batch_size=256, one_dim=False):
+        all_inputs = None
+        all_labels = None
+        for inputs, labels in self.loader(batch_size, shuffle=True):
+            if one_dim:
+                inputs = inputs.view(len(inputs), -1)
+                # inputs = torch.flatten(inputs, start_dim=1)
 
-    def calc_mean_std(self, base=False, batch_size=256, formatted=False):
-        if base:
-            return self.fetch_base_info("ms")
-        elem = None
-        for inputs, _ in self.loader(batch_size, shuffle=False):
-            # p は、バッチの次元を除いたものが2次元データなら(1, 0, 2, 3)、1次元データなら(1, 0, 2)
-            p = torch.arange(len(inputs.shape))
-            p[0], p[1] = 1, 0
-            p = tuple(p)
-
-            elem_b = inputs.permute(p).reshape(inputs.shape[1], -1)
-            if elem is None:
-                elem = elem_b
+            if all_inputs is None:
+                all_inputs = inputs
+                all_labels = labels
             else:
-                elem = torch.cat([elem, elem_b], dim=1)
+                all_inputs = torch.cat([all_inputs, inputs], dim=0)
+                all_labels = torch.cat([all_labels, labels], dim=0)
+                
+        return all_inputs, all_labels
+    
+    # 未実装
+    def _ds_to_folder(self, num, path):
+    #     path = Path(path)
+    #     path.mkdir(parents=True, exist_ok=True)
+    #     ds_it = iter(ds)
+    #     for i in range(num):
+    #         img, label = next(ds_it)
+    #         img = np.array(img, dtype=np.uint8)
+    #         img = Image.fromarray(img)
+    #         img_name = f"{i}_label.png"
+    #         img.save(path / Path(img_name), format="png")
+        pass
 
-        mean = elem.mean(dim=1).tolist()
-        std = elem.std(dim=1).tolist()
+    def _fetch_base_info(self, info):
+        expected = ("ld", "map", "msd")
+        assert info in expected, f"Invalid argument. Expected one of: {', '.join(expected)}."
 
-        if formatted:
-            return f"transforms.Normalize(mean={mean}, std={std}, inplace=True)"
+        obj_path = self.base_ds.root / (self.ds_str + "." + info)
+        info_path = self.base_ds.root / (self.ds_str + ".info")
+
+        # 拡張子で検索 -> .infoの[info]を検索
+        if obj_path.exists():
+            obj = torch.load(obj_path, weights_only=False)
+
+        elif info_path.exists(): # 現仕様では常にelseとなる
+            info_dict = torch.load(info_path, weights_only=False)
+            obj = info_dict[info]
+
+        # 現仕様では.infoファイルは作成しない
         else:
-            return {"mean": mean, "std": std}
+            obj = getattr(self, f"_make_{info}")()
+            torch.save(obj, obj_path)
+            print(f"Saved label data to the following path: {obj_path}")
+            
+        return obj
 
-    def calc_min_max(self, batch_size=256, formatted=False):
-        elem = None
-        for inputs, _ in self.loader(batch_size, shuffle=False):
-            # p は、バッチの次元を除いたものが2次元データなら(1, 0, 2, 3)、1次元データなら(1, 0, 2)
-            p = torch.arange(len(inputs.shape))
-            p[0], p[1] = 1, 0
-            p = tuple(p)
+    def _make_ld(self):
+        # fetch_ldとほぼ同じだが、ところどころ違うから別で定義した方が楽そう
 
-            elem_b = inputs.permute(p).reshape(inputs.shape[1], -1)
-            if elem is None:
-                elem = elem_b
+        label_l = []  # label のリストを作成
+        label_d = dict()  # index と対応させ、label を key とし、index を item とした dict を作成
+        for idx in self.indices:
+            _, label = self.base_ds[idx]
+            label_l.append(label)
+            if label_d.get(label) is None:
+                label_d[label] = [idx]
             else:
-                elem = torch.cat([elem, elem_b], dim=1)
+                label_d[label].append(idx)
 
-        min = elem.min(dim=1).values.tolist()
-        max = elem.max(dim=1).values.tolist()
+        label_d = dict(sorted(label_d.items()))
 
-        if formatted:
-            return f"transforms.Normalize(min={min}, max={max}, inplace=True)"
-        else:
-            return {"min": min, "max": max}
+        return label_l, label_d
 
-    def _make_map(self, transform_l=None, batch_size=256, feat_extracter=None, dim_reducer_f=None, plot=False):
+    def _make_msd(self):
+        ms_dict = self.base_ds.base_dsh.transform([torchvision.transforms.ToTensor()]).calc_mean_std(base=False)
+        
+        return ms_dict
+
+    def _make_map(self, transform_l=None, batch_size=256, feat_extracter=None, dim_reducer_f=None):
         if transform_l is None:
             transform_l = [torchvision.transforms.Lambda(lambda image: image.convert("RGB")), torchvision.transforms.ToTensor(), torchvision.transforms.Resize((224, 224), antialias=True)]
 
@@ -529,161 +585,5 @@ class DatasetHandler(Dataset):
 
         mapping = dim_reducer_f(feat)
 
-        # if plot:
-        #     color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
-        #     fig = plt.figure( figsize=(8,8) )
-        #     ax = fig.add_subplot(1, 1, 1)
-        #     i = 0
-
-        # points = []
-        # for class_label in tmp_ds.fetch_classes(listed=True):
-        #     class_mask = labels == class_label
-        #     x = mapping[class_mask, 0]
-        #     y = mapping[class_mask, 1]
-
-        #     class_center = np.array([x.mean(), y.mean()])
-        #     points.append(class_center)
-
-        #     if plot:
-        #         c = i % len(color_cycle)
-        #         ax.scatter(x, y, color=color_cycle[c], label=f'Class {class_label}', alpha=0.25, s=4)
-        #         ax.scatter(x=class_center[0], y=class_center[1], color=color_cycle[c], marker="*", s=125)
-        #         i += 1
-
-        # points = np.stack(points)
-
-        # distance_matrix = np.sqrt(((points[:, np.newaxis, :] - points[np.newaxis, :, :]) ** 2).sum(axis=-1))
-
-        # distance = distance_matrix.mean()
-
-        # distance = np.sqrt(distance_matrix).mean()
-
-        # mask = ~np.eye(distance_matrix.shape[0], dtype=bool)
-        # tmp_mat = distance_matrix[mask].reshape(distance_matrix.shape[0], -1)
-        # distance = tmp_mat.min(axis=1).mean()
-
-        # if plot:
-            # ax.set_title(f"class_dist: {distance}")
-            # ax.legend()
-            # fig.show()
-        
-        # return distance
-
         return labels, mapping
 
-    def _make_ld(self):
-        # fetch_ldとほぼ同じだが、ところどころ違うから別で定義した方が楽そう
-
-        label_l = []  # label のリストを作成
-        label_d = dict()  # index と対応させ、label を key とし、index を item とした dict を作成
-        for idx in self.indices:
-            _, label = self.base_ds[idx]
-            label_l.append(label)
-            if label_d.get(label) is None:
-                label_d[label] = [idx]
-            else:
-                label_d[label].append(idx)
-
-        label_d = dict(sorted(label_d.items()))
-
-        return label_l, label_d
-
-    def _make_ms(self):
-        ms_dict = self.base_ds.base_dsh.calc_mean_std(base=False)
-        
-        return ms_dict
-
-
-
-    # def calc_classdist(self, transform_l=None, batch_size=256, feat_extracter=None, dim_reducer_f=None, plot=False):
-    #     if transform_l is None:
-    #         transform_l = [torchvision.transforms.Lambda(lambda image: image.convert("RGB")), torchvision.transforms.ToTensor(), torchvision.transforms.Resize((224, 224), antialias=True)]
-
-    #     tmp_ds = self.transform(transform_l=transform_l)
-    #     tmp_dl = tmp_ds.loader(batch_size)
-
-    #     if feat_extracter is None:
-    #         transform_l.append(torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=True))
-    #         base_arc = resnet50(weights=ResNet50_Weights.DEFAULT)
-    #         feat_extracter = torch.nn.Sequential(*list(base_arc.children())[:-1])
-            
-    #     if dim_reducer_f is None:
-    #         dim_reducer_f = UMAP(n_neighbors=50, min_dist=0.1).fit_transform
-
-    #     trainer = Trainer(network=feat_extracter)
-
-    #     feat, labels = trainer.pred_1iter(tmp_dl)
-    #     feat = feat.view(len(feat), -1)
-    #     feat = feat.cpu()
-    #     labels = labels.cpu()
-
-    #     mapping = dim_reducer_f(feat)
-
-    #     if plot:
-    #         color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
-    #         fig = plt.figure( figsize=(8,8) )
-    #         ax = fig.add_subplot(1, 1, 1)
-    #         i = 0
-
-    #     points = []
-    #     for class_label in tmp_ds.fetch_classes(listed=True):
-    #         class_mask = labels == class_label
-    #         x = mapping[class_mask, 0]
-    #         y = mapping[class_mask, 1]
-
-    #         class_center = np.array([x.mean(), y.mean()])
-    #         points.append(class_center)
-
-    #         if plot:
-    #             c = i % len(color_cycle)
-    #             ax.scatter(x, y, color=color_cycle[c], label=f'Class {class_label}', alpha=0.25, s=4)
-    #             ax.scatter(x=class_center[0], y=class_center[1], color=color_cycle[c], marker="*", s=125)
-    #             i += 1
-
-
-    #     points = np.stack(points)
-    #     distance_matrix = np.sqrt(((points[:, np.newaxis, :] - points[np.newaxis, :, :]) ** 2).sum(axis=-1))
-
-    #     distance = distance_matrix.mean()
-
-
-    #     # distance = np.sqrt(distance_matrix).mean()
-
-    #     # mask = ~np.eye(distance_matrix.shape[0], dtype=bool)
-    #     # tmp_mat = distance_matrix[mask].reshape(distance_matrix.shape[0], -1)
-    #     # distance = tmp_mat.min(axis=1).mean()
-
-    #     if plot:
-    #         ax.set_title(f"class_dist: {distance}")
-    #         ax.legend()
-    #         fig.show()
-        
-    #     return distance
-        
-    def load_data(self, batch_size=256, one_dim=False):
-        all_inputs = None
-        all_labels = None
-        for inputs, labels in self.loader(batch_size, shuffle=True):
-            if one_dim:
-                inputs = inputs.view(len(inputs), -1)
-                # inputs = torch.flatten(inputs, start_dim=1)
-
-            if all_inputs is None:
-                all_inputs = inputs
-                all_labels = labels
-            else:
-                all_inputs = torch.cat([all_inputs, inputs], dim=0)
-                all_labels = torch.cat([all_labels, labels], dim=0)
-                
-        return all_inputs, all_labels
-    
-    def loader(self, batch_size=128, shuffle=True, num_workers=2, pin_memory=True, **kwargs):
-        if len(self) == 0:
-            return None
-        return DataLoader(self, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, **kwargs)
-                
-
-# def dl(ds, batch_size, shuffle=True, num_workers=2, pin_memory=True, **kwargs):
-#     if len(ds) == 0:
-#         return None
-#     return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, **kwargs)

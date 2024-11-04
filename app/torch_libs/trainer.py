@@ -89,8 +89,8 @@ class Trainer(TrainerUtils):
             assert isinstance(scheduler_t[1], str), "scheduler_t[1] must be a string"
             assert scheduler_t[1] in [
                 "epoch",
-                "batch",
-            ], "scheduler_t[1] must be either 'epoch' or 'batch'"
+                "iter",
+            ], "scheduler_t[1] must be either 'epoch' or 'iter'"
         self.scheduler_t = scheduler_t
 
     def train_1epoch(self, dl):
@@ -117,7 +117,7 @@ class Trainer(TrainerUtils):
             total_loss += loss.item() * len(inputs)
             total_corr += corr
 
-            if self.scheduler_t is not None and self.scheduler_t[1] == "batch":
+            if self.scheduler_t is not None and self.scheduler_t[1] == "iter":
                 self.scheduler_t[0].step()
         if self.scheduler_t is not None and self.scheduler_t[1] == "epoch":
             self.scheduler_t[0].step()
@@ -190,6 +190,7 @@ class Trainer(TrainerUtils):
         self.network.load_state_dict(sd)
 
     def get_lr(self):
+        # return self.scheduler_t[0].get_lr()[0]
         return self.optimizer.param_groups[0]["lr"]
 
     def count_params(self):
@@ -280,12 +281,14 @@ class MultiTrainer(TrainerUtils):
         total_losses = [0.0 for _ in self.trainers]
         total_corrs = [0.0 for _ in self.trainers]
 
+        for trainer in self.trainers:
+            trainer.network.train()
+
         for inputs, labels in dl:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
 
             for i, trainer in enumerate(self.trainers):
-                trainer.network.train()
                 outputs = trainer.network(inputs)
                 loss = trainer.loss_func(outputs, labels)
 
@@ -299,8 +302,11 @@ class MultiTrainer(TrainerUtils):
                 total_losses[i] += loss.item() * len(inputs)
                 total_corrs[i] += corr
 
-                if trainer.scheduler_t is not None and trainer.scheduler_t[1] == "batch":
+            for trainer in self.trainers:
+                if trainer.scheduler_t is not None and trainer.scheduler_t[1] == "iter":
                     trainer.scheduler_t[0].step()
+        
+        for trainer in self.trainers:
             if trainer.scheduler_t is not None and trainer.scheduler_t[1] == "epoch":
                 trainer.scheduler_t[0].step()
 
@@ -316,13 +322,15 @@ class MultiTrainer(TrainerUtils):
         total_losses = [0.0 for _ in self.trainers]
         total_corrs = [0.0 for _ in self.trainers]
 
-        for inputs, labels in dl:
-            inputs = inputs.to(self.device)
-            labels = labels.to(self.device)
+        for trainer in self.trainers:
+            trainer.network.eval()
 
-            for i, trainer in enumerate(self.trainers):
-                with torch.no_grad():
-                    trainer.network.train()
+        with torch.no_grad():
+            for inputs, labels in dl:
+                inputs = inputs.to(self.device)
+                labels = labels.to(self.device)
+
+                for i, trainer in enumerate(self.trainers):
                     outputs = trainer.network(inputs)
                     loss = trainer.loss_func(outputs, labels)
 
@@ -349,107 +357,3 @@ class MultiTrainer(TrainerUtils):
     
     def __getitem__(self, idx):
         return self.trainers[idx]
-
-
-class MyMultiTrain(TrainerUtils):
-    def __init__(self, models=None, device=None):
-        self.models = models
-        super().__init__(device)
-
-    def train_1epoch(self, dl):
-        for model in self.models:
-            model.network.train()
-        total_losses = [0.0 for _ in self.models]
-        total_corrs = [0.0 for _ in self.models]
-
-        for inputs, labels in dl:
-            # labels = torch.Tensor([0 for _ in range(len(labels))]).long() # 消すこと
-            inputs = inputs.to(self.device)
-            labels = labels.to(self.device)
-
-            for i, model in enumerate(self.models):
-                outputs = model.network(inputs)
-                loss = model.loss_func(outputs, labels)
-
-                _, pred = torch.max(outputs.detach(), dim=1)
-                corr = torch.sum(pred == labels.data).item()
-
-                model.optimizer.zero_grad()
-                loss.backward()
-                model.optimizer.step()
-
-                total_losses[i] += loss.item() * len(inputs)
-                total_corrs[i] += corr
-
-            for model in self.models:
-                if model.scheduler_t is not None and model.scheduler_t[1] == "batch":
-                    model.scheduler_t[0].step()
-        for model in self.models:
-            if model.scheduler_t is not None and model.scheduler_t[1] == "epoch":
-                model.scheduler_t[0].step()
-
-        total_losses = [loss / len(dl.dataset) for loss in total_losses]
-        # total_losses = [loss / (len(dl.dataset) * len(self.models)) for loss in total_losses]
-        total_accs = [corr / len(dl.dataset) for corr in total_corrs]
-
-        return total_losses, total_accs
-
-    def val_1epoch(self, dl):
-        if dl is None:
-            return None, None
-
-        for model in self.models:
-            model.network.eval()
-        total_losses = [0.0 for _ in self.models]
-        total_corrs = [0.0 for _ in self.models]
-
-        with torch.no_grad():
-            for inputs, labels in dl:
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device)
-
-                for i, model in enumerate(self.models):
-                    outputs = model.network(inputs)
-                    loss = model.loss_func(outputs, labels)
-
-                    _, pred = torch.max(outputs.detach(), dim=1)
-                    corr = torch.sum(pred == labels.data).item()
-
-                    total_losses[i] += loss.item() * len(inputs)
-                    total_corrs[i] += corr
-
-        val_losses = [loss / len(dl.dataset) for loss in total_losses]
-        # val_losses = [loss / (len(dl.dataset) * len(self.models)) for loss in total_losses]
-        val_accs = [acc / len(dl.dataset) for acc in total_corrs]
-
-
-        return val_losses, val_accs
-        
-
-    def __getattr__(self, attr):
-        def wrapper(*args, **kwargs):
-            return_l = []
-            for i, model in enumerate(self.models):
-                # new_args = []
-                # for arg in args:
-                #     if isinstance(arg, list) and len(arg) == len(self.models):
-                #         new_arg = arg[i]
-                #     else:
-                #         new_arg = arg
-                #     new_args.append(new_arg)
-                new_args = [arg[i] if isinstance(arg, list) and len(arg) == len(self.models) else arg for arg in args]
-
-                # new_kwargs = dict()
-                # for k, v in kwargs.items():
-                #     if isinstance(v, list) and len(v) == len(self.models):
-                #         new_kwargs[k] = v[i]
-                #     else:
-                #         new_kwargs[k] = v
-                new_kwargs = {k: v[i] if isinstance(v, list) and len(v) == len(self.runs) else v for k, v in kwargs.items()}
-                return_l.append(getattr(model, attr)(*new_args, **new_kwargs))
-            return return_l
-
-        return wrapper
-
-    def __getitem__(self, idx):
-        return self.models[idx]

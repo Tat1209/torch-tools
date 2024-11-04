@@ -11,6 +11,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from .modules import View, CopyConcat, SplitMerge
+
 # from ..transforms._presets import ImageClassification
 # from ..utils import _log_api_usage_once
 # from ._api import register_model, Weights, WeightsEnum
@@ -48,53 +50,6 @@ __all__ = [
         "wide_resnet50_2",
         "wide_resnet101_2",
         ]
-
-class View(nn.Module):
-    def __init__(self, shape):
-        super().__init__()
-        self.shape = shape
-
-    def __repr__(self):
-        return f'{self.__class__.__name__}{self.shape}'
-
-    def forward(self, input):
-        batch_size = input.size(0)
-        shape = (batch_size, *self.shape)
-        out = input.view(shape)
-        return out
-
-
-class CopyConcat(nn.Module):
-    def __init__(self, n, dim):
-        super().__init__()
-        # dimは、(C, H, W) に対する処理を想定
-        self.n = n
-        self.dim = dim
-
-    def __repr__(self):
-        return f'{self.__class__.__name__}({self.n}, {self.dim})'
-
-    def forward(self, input):
-        out = torch.cat([input for _ in range(self.n)], dim=self.dim+1)
-        return out
-
-
-class SplitMean(nn.Module):
-    def __init__(self, chunks, dim):
-        super().__init__()
-        # dimは、(C, H, W) に対する処理を想定
-        self.chunks = chunks
-        self.dim = dim
-
-    def __repr__(self):
-        return f'{self.__class__.__name__}({self.chunks}, {self.dim})'
-
-    # inputにはバッチ(B, C, H, W)が入る。画像のテンソルはdim=1からはじまるからdimに1たしてる
-    def forward(self, input):
-        x = input.view(input.shape[0], self.chunks, -1)
-        x = torch.mean(x, dim=self.dim+1)
-        return x
-
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:
     """3x3 convolution with padding"""
@@ -242,6 +197,7 @@ class ResNet(nn.Module):
             norm_layer: Optional[Callable[..., nn.Module]] = None,
             nb_fils: int = 64,
             ee_groups: int = 1,
+            merge_sum = False
             ) -> None:
         super().__init__()
         _log_api_usage_once(self)
@@ -266,6 +222,7 @@ class ResNet(nn.Module):
         self.ee_groups = ee_groups
         self.groups = self.ee_groups
         self.base_width = width_per_group
+        self.merge_sum = merge_sum
 
         # -------------------------------------------------------------------------------------------------------------------------------------------
         # self.conv1 = nn.Conv2d(3 * self.groups, self.inplanes * self.groups, kernel_size=7, stride=2, padding=3, bias=False, groups=self.groups)
@@ -299,7 +256,7 @@ class ResNet(nn.Module):
                 View((-1, 1)),
                 nn.Conv1d(fc_in * self.groups, fc_out * self.groups, kernel_size=1, bias=True, groups=self.groups),
                 View((-1,)),
-                SplitMean(self.ee_groups, dim=0)
+                SplitMerge(self.ee_groups, dim=0, sum=self.merge_sum)
                 )
 
         for m in self.modules():

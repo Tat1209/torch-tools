@@ -20,18 +20,24 @@ from models.gitresnet_ee import resnet18 as net
 
 ds = Datasets(root=work_path / "assets/datasets/")
 
-exp_name = "exp_tmp"
+exp_name = "exp_T"
+# exp_name = "exp_tmp"
 
 base_epochs = 200
 
 max_lr = 0.0005
 batch_size = 128
 
-train_ds_str_l = ["cifar100_train", "stl10_train"]
-val_ds_str_l = ["cifar100_val", "stl10_val"]
+# train_ds_str_l = ["stl10_train"]
+# val_ds_str_l = ["stl10_val"]
+# train_ds_str_l = ["cifar10_train", "cifar100_train", "stl10_train"]
+# val_ds_str_l = ["cifar10_val", "cifar100_val", "stl10_val"]
+train_ds_str_l = ["cifar10_train", "cifar100_train"]
+val_ds_str_l = ["cifar10_val", "cifar100_val"]
 
-ndata_l = [10000, 5000, 2500, 1000]
-fils_ll = [[64, 16]]
+ndata_l = [10000, 1000]
+# ndata_l = [10000, 5000, 2500, 1000]
+fils_ll = [[32, 8, 4]]
 T_l = [0.5, 1, 2, 4, 8, 16, 32, 64]
 
 base_fils = 64
@@ -42,6 +48,10 @@ for train_ds_str, val_ds_str in zip(train_ds_str_l, val_ds_str_l):
     val_ds = ds(val_ds_str)
     
     match train_ds_str:
+        case "cifar10_train":
+            base_ndata = 10000
+            train_trans = [transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip(), transforms.RandomRotation(15), transforms.ToTensor(), base_train_ds.normalizer()]
+            val_trans = [transforms.ToTensor(), base_train_ds.normalizer()]
         case "cifar100_train":
             base_ndata = 10000
             train_trans = [transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip(), transforms.RandomRotation(15), transforms.ToTensor(), base_train_ds.normalizer()]
@@ -60,7 +70,7 @@ for train_ds_str, val_ds_str in zip(train_ds_str_l, val_ds_str_l):
     for ndata in ndata_l:
         train_ds = base_train_ds.balance_label(seed=0).in_ndata(ndata)
         if ndata > len(train_ds):
-            break
+            continue
         
         for T in T_l:
             for fils_l in fils_ll:

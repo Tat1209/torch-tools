@@ -20,8 +20,8 @@ from models.gitresnet_ee import resnet18 as net
 
 ds = Datasets(root=work_path / "assets/datasets/")
 
-exp_name = "exp_T"
-# exp_name = "exp_tmp"
+# exp_name = "exp_T"
+exp_name = "exp_tmp"
 
 base_epochs = 200
 
@@ -37,8 +37,9 @@ val_ds_str_l = ["cifar10_val", "cifar100_val"]
 
 ndata_l = [10000, 1000]
 # ndata_l = [10000, 5000, 2500, 1000]
-fils_ll = [[32, 8, 4]]
-T_l = [0.5, 1, 2, 4, 8, 16, 32, 64]
+fils_ll = [[64, 32, 16, 8, 4, 2]]
+T_l = [128, 256, 512, 1024, 2048]
+# T_l = [0.5, 1, 2, 4, 8, 16, 32, 64]
 
 base_fils = 64
 

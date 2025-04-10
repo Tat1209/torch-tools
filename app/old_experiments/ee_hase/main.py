@@ -19,7 +19,7 @@ from trans import Trans
 from mytrainer import MyTrainer
 
 # from models.resnet_ee import resnet18 as net
-from models.gitresnet_ee import resnet18 as net
+from models.resnet_git_ee import resnet18 as net
 
 ds = Datasets(root=work_path / "assets/datasets/")
 device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")

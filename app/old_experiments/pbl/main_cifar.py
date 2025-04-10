@@ -15,7 +15,7 @@ from trans import Trans
 
 # from models.resnet_1ch import resnet18 as net
 # from torchvision.models import resnet18 as net
-from models.gitresnet import resnet18 as net
+from models.resnet_git import resnet18 as net
 
 ds = Datasets(root=work_path / "assets/datasets/")
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")

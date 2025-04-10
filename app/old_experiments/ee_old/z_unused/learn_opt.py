@@ -8,7 +8,7 @@ from trans import Trans
 
 import utils
 
-from models.gitresnet import resnet18 as net
+from models.resnet_git import resnet18 as net
 model_arc = "gitresnet"
 
 work_path = '/home/haselab/Documents/tat/Research/'

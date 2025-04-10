@@ -15,7 +15,7 @@ sys.path.append(torchlib_path)
 from datasets import Datasets, dl
 from run_manager import RunManager, RunsManager, RunViewer
 
-from models.csg_nets import AutoEncoder as net
+from models.ae_csg import AutoEncoder as net
 from trainer_ae import AETrainer, AEMultiTrain
 
 ds = Datasets(root=work_path / "assets/datasets/")

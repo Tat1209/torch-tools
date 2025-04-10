@@ -14,7 +14,7 @@ from trainer import Trainer, MultiTrainer
 from trans import Trans
 
 # from models.resnet_ee import resnet18 as net
-from models.gitresnet_ee import resnet18 as net
+from models.resnet_git_ee import resnet18 as net
 
 ds = Datasets(root=work_path / "assets/datasets/")
 

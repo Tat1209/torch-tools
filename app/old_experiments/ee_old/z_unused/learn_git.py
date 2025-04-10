@@ -5,7 +5,7 @@ from datasets import Prep
 from app.ee.trainer import Model
 from trans import Trans
 
-from models.gitresnet import resnet18 as net
+from models.resnet_git import resnet18 as net
 model_arc = "gitresnet"
 
 from torch.optim.lr_scheduler import _LRScheduler

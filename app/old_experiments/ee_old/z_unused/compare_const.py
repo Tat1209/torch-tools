@@ -2,9 +2,9 @@ import utils
 
 # from models.resnet_hase import resnet18 as hasenet
 # from models.resnet_hase_2d import ResNet18 as hasenet
-from models.gitresnet import resnet18 as tananet
+from models.resnet_git import resnet18 as tananet
 # from models.resnet_ee import resnet18 as tananet
-from models.dd_resnet import make_resnet18k as net
+from models.resnet_dd import make_resnet18k as net
 
 
 hase = tananet(num_classes=100)

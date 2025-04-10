@@ -14,7 +14,7 @@ import numpy as np
 # model_arc = "myresnet"
 # from torchvision.models import resnet18 as net
 # model_arc = "official"
-from models.gitresnet_ee import resnet18 as net
+from models.resnet_git_ee import resnet18 as net
 # from models.gitresnet_ee_only import resnet18 as net
 model_arc = "gitresnet_ee"
 

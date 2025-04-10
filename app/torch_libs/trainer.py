@@ -1,7 +1,7 @@
 import sys
 import os
 import io
-import datetime
+from datetime import datetime
 from time import time
 
 import torch
@@ -9,6 +9,7 @@ import numpy as np
 import polars as pl
 from torchinfo import summary
 
+import utils
 
 class TrainerUtils:
     def __init__(self, device):
@@ -16,68 +17,91 @@ class TrainerUtils:
             self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         else:
             self.device = device
-        self.start_time = None
 
-    def interval(self, itv=None, step=None, last_step=None):
-        return itv is None or (step - 1) % itv >= itv - 1 or step == last_step
+        self.time_data = {}
+        self.created_time = time()
 
-    def printmet(self, met_dict, e, epochs, itv: int | float =1, anyval=False, timezone=9):
+    def printmet(self, met_dict, e, epochs, itv: int | float =1, force_print=False, timezone=0):
         """
             met_dict    : 表示内容
             e           : 現在のepoch数(最初は1)
             epochs      : 終了エポック数
             itv         : このインターバルごとに1行stdout それ以外は前回の出力を上書きしつつstdout 最終epochは必ず1行stdout
-            anyval      : met_dictの各要素がfloat以外でも表示
+            force_print : met_dictの各要素がfloat以外でも表示
             timezone    : etaの表示時間にx時間加算
-            
+
             Ex.)
             # e+1 エポック目の met_dict の内容を 100epochまで出力 5epochごとに出力を残す
             trainer.printmet(met_dict, e + 1, 100, itv=5)
 
-            # e+1 エポック目の met_dict の内容を epochs epochまで出力 epochsのうち4回出力を残す
+            # e+1 エポック目の met_dict の内容を epochs epochまで出力 epochsのうち4回出力を残す 
             trainer.printmet(met_dict, e + 1, epochs, itv=epochs / 4)
         """
         if e == 1:
             self.start_time = time()
         else:
-            stop_time = time()
-            req_time = (stop_time - self.start_time) / (e - 1) * epochs
-            left = self.start_time + req_time - stop_time
-            eta = (datetime.datetime.now() + datetime.timedelta(seconds=left) + datetime.timedelta(hours=timezone)).strftime("%Y-%m-%d %H:%M")
-            t_hour, t_min = divmod(left // 60, 60)
-            left = f"{int(t_hour):02d}:{int(t_min):02d}"
+            current_time = time()
+            req_time = (current_time - self.start_time) / (e - 1) * epochs
+            eta = self.start_time + req_time
+            left = eta - current_time
+            
+            eta_fmt = utils.format_time(eta, style=0)
+
+            left_fmt = utils.format_duration(left, style=0)
 
         disp_str = ""
         for key, value in met_dict.items():
             try:
+
                 if key == "epoch":
                     disp_str += f"Epoch: {value:>4}/{value - (e-1) - 1 + epochs:>4}"
                 else:
-                    if anyval:
+                    if force_print:
                         disp_str += f"    {key}: {value}"
                     else:
                         disp_str += f"    {key}: {value:<9.7f}"
             except Exception:
                 pass
         if (e - 1) != 0:
-            disp_str += f"    eta: {eta} (left: {left})"
+            disp_str += f"    eta: {eta_fmt} (left: {left_fmt})"
 
-        # if (e - 1) % itv >= itv - 1 or e == epochs:
-        if self.interval(itv=itv, step=e, last_step=epochs):
+        if utils.interval(step=e, itv=itv, last_step=epochs):
             print(disp_str)
         else:
             print(disp_str, end="\r")
+    
+    @classmethod
+    def time_log(cls, name="time", mode="add"):
+        assert mode in ("add", "set"), f"Invalid mode: {mode}. Expected 'add' or 'set'."
+
+        def _deco(func):
+            def _wrapper(*args, **kwargs):
+                self = args[0]  # インスタンス（self）を取得
+                if not hasattr(self, "time_data"):
+                    raise AttributeError("Instance must have 'time_data' attribute.")
+                if mode == "add":
+                    start = time()
+                    result = func(*args, **kwargs)
+                    elapsed = time() - start
+                    self.time_data[name] = self.time_data.get(name, 0) + elapsed
+                elif mode == "set":
+                    result = func(*args, **kwargs)
+                    self.time_data[name] = time()
+                return result
+            return _wrapper
+        return _deco
+
+    def timeinfo(self, style=0):
+        current_time = time()
+        current_time_fmt = utils.format_time(current_time, style=1)
+        duration = current_time - self.created_time
+        duration_fmt = utils.format_duration(duration)
+
+        return {"timestamp": current_time, "timestamp_fmt": current_time_fmt, "duration": duration, "duration_fmt": duration_fmt}
 
 
 class Trainer(TrainerUtils):
-    def __init__(
-        self,
-        network=None,
-        loss_func=None,
-        optimizer=None,
-        scheduler_t=None,
-        device=None,
-    ):
+    def __init__(self, network=None, loss_func=None, optimizer=None, scheduler_t=None, device=None):
         super().__init__(device)
         self.network = network.to(self.device)
         self.loss_func = loss_func
@@ -87,12 +111,11 @@ class Trainer(TrainerUtils):
             assert len(scheduler_t) == 2, "scheduler_t must have two elements"
             assert isinstance(scheduler_t[0], torch.optim.lr_scheduler.LRScheduler), "scheduler_t[0] must be a torch.optim.lr_scheduler type"
             assert isinstance(scheduler_t[1], str), "scheduler_t[1] must be a string"
-            assert scheduler_t[1] in [
-                "epoch",
-                "iter",
-            ], "scheduler_t[1] must be either 'epoch' or 'iter'"
+            assert scheduler_t[1] in ["epoch", "iter"], "scheduler_t[1] must be either 'epoch' or 'iter'"
         self.scheduler_t = scheduler_t
 
+    # @TrainerUtils.time_log("train_dur", mode="add")
+    # @TrainerUtils.time_log("total_dur", mode="add")
     def train_1epoch(self, dl):
         self.network.train()
         total_loss = 0.0
@@ -127,6 +150,7 @@ class Trainer(TrainerUtils):
 
         return train_loss, train_acc
 
+    # @TrainerUtils.time_log("total_dur", mode="add")
     def val_1epoch(self, dl):
         if dl is None:
             return None, None
@@ -154,6 +178,7 @@ class Trainer(TrainerUtils):
 
         return val_loss, val_acc
 
+    # @TrainerUtils.time_log("pred_dur", mode="add")
     def pred_1iter(self, dl, categorize=False):
         self.network.eval()
         total_output = None
@@ -181,6 +206,18 @@ class Trainer(TrainerUtils):
                     total_label= torch.cat((total_label, labels), dim=0)
 
         return total_output, total_label
+    
+    def timeinfo(self):
+        time_info = super().timeinfo()
+        # for k, v in self.time_data.items():
+        #     time_info[k] = v
+        #     k_fmt = k + "_fmt"
+        #     if k.endswith("_dur"):
+        #         time_info[k_fmt] = utils.format_duration(v, style=0)
+        #     elif k.endswith("_time"):
+        #         time_info[k_fmt] = utils.format_time(v, style=1)
+
+        return time_info
 
     def get_sd(self):
         return self.network.state_dict()
@@ -191,7 +228,8 @@ class Trainer(TrainerUtils):
 
     def get_lr(self):
         # return self.scheduler_t[0].get_lr()[0]
-        return self.optimizer.param_groups[0]["lr"]
+        return self.scheduler_t[0].get_last_lr()[0] # recommended
+        # return self.optimizer.param_groups[0]["lr"]
 
     def count_params(self):
         return sum(p.numel() for p in self.network.parameters())
@@ -200,21 +238,21 @@ class Trainer(TrainerUtils):
         return sum(p.numel() for p in self.network.parameters() if p.requires_grad)
 
     def arc_check(
-        self,
-        out_file=False,
-        fname="arccheck.txt",
-        dl=None,
-        input_size=(200, 3, 256, 256),
-        verbose=1,
-        col_names=[
-            "input_size",
-            "output_size",
-            "kernel_size",
-            "num_params",
-            "mult_adds",
-        ],
-        row_settings=["var_names"],
-    ):
+            self,
+            out_file=False,
+            fname="arccheck.txt",
+            dl=None,
+            input_size=(200, 3, 256, 256),
+            verbose=1,
+            col_names=[
+                "input_size",
+                "output_size",
+                "kernel_size",
+                "num_params",
+                "mult_adds",
+                ],
+            row_settings=["var_names"],
+            ):
         if dl is not None:
             inputs, _ = next(iter(dl))
             input_size = inputs.shape
@@ -222,12 +260,12 @@ class Trainer(TrainerUtils):
             tmp_out = io.StringIO()
             sys.stdout = tmp_out
             summary(
-                model=self.network,
-                input_size=input_size,
-                verbose=verbose,
-                col_names=col_names,
-                row_settings=row_settings,
-            )
+                    model=self.network,
+                    input_size=input_size,
+                    verbose=verbose,
+                    col_names=col_names,
+                    row_settings=row_settings,
+                    )
         finally:
             sys.stdout = sys.__stdout__
         summary_str = tmp_out.getvalue()
@@ -305,14 +343,14 @@ class MultiTrainer(TrainerUtils):
             for trainer in self.trainers:
                 if trainer.scheduler_t is not None and trainer.scheduler_t[1] == "iter":
                     trainer.scheduler_t[0].step()
-        
+
         for trainer in self.trainers:
             if trainer.scheduler_t is not None and trainer.scheduler_t[1] == "epoch":
                 trainer.scheduler_t[0].step()
 
         train_losses = [total_loss / len(dl.dataset) for total_loss in total_losses]
         train_accs = [total_corr / len(dl.dataset) for total_corr in total_corrs]
-            
+
         return train_losses, train_accs
 
     def val_1epoch(self, dl):
@@ -354,6 +392,7 @@ class MultiTrainer(TrainerUtils):
                 return_l.append(getattr(trainer, attr)(*new_args, **new_kwargs))
             return return_l
         return wrapper
-    
+
     def __getitem__(self, idx):
         return self.trainers[idx]
+

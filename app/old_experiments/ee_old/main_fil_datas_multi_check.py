@@ -13,7 +13,7 @@ import utils
 
 # from models.resnet_ee import resnet18 as net
 # from torchvision.models import resnet18 as net
-from models.gitresnet_ee import resnet18 as net
+from models.resnet_git_ee import resnet18 as net
 
 
 ds = Datasets(root=f"{work_path}assets/datasets/")

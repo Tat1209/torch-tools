@@ -1,3 +1,4 @@
+import random
 import itertools
 from copy import copy
 
@@ -95,7 +96,7 @@ class DatasetHandler(Dataset):
         indices_new = np.array(indices_new, dtype=np.int32)
 
         return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
-    
+
     def in_ratio(self, a, b=None):
         # indices_new = self.indices.copy()
         classinfo_new = copy(self.classinfo)
@@ -146,8 +147,8 @@ class DatasetHandler(Dataset):
                 if seed != "arange":
                     if seed is not None and not isinstance(seed, int):
                         raise TypeError("Variables must be of type int, 'None', or the string 'arange'.")
-                    np.random.seed(seed)
-                    np.random.shuffle(lst)
+                    rng = np.random.default_rng(seed=seed)
+                    rng.shuffle(lst)
                 length = len(lst)
                 a_idx = lst[: int(length * ratio)]
                 b_idx = lst[int(length * ratio) :]
@@ -157,7 +158,7 @@ class DatasetHandler(Dataset):
 
             indices_a_new = np.array(list(itertools.chain(*a_d.values())), dtype=np.int32)
             indices_b_new = np.array(list(itertools.chain(*b_d.values())), dtype=np.int32)
-            
+
             indices_a_new.sort()
             indices_b_new.sort()
 
@@ -166,8 +167,8 @@ class DatasetHandler(Dataset):
             if seed != "arange":
                 if seed is not None and not isinstance(seed, int):
                     raise TypeError("Variables must be of type int, 'None', or the string 'arange'.")
-                np.random.seed(seed)
-                np.random.shuffle(indices_new)
+                rng = np.random.default_rng(seed=seed)
+                rng.shuffle(indices_new)
             length = len(indices_new)
             indices_a_new = indices_new[: int(length * ratio)]
             indices_b_new = indices_new[int(length * ratio) :]
@@ -184,15 +185,11 @@ class DatasetHandler(Dataset):
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
-        tmp = self.base_ds.u_seed
-        if tmp is not None:
-            seed = tmp
-
         if seed != "arange":
             if seed is not None and not isinstance(seed, int):
                 raise TypeError("Variables must be of type int, 'None', or the string 'range'.")
-            np.random.seed(seed)
-            np.random.shuffle(indices_new)
+            rng = np.random.default_rng(seed=seed)
+            rng.shuffle(indices_new)
 
         return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
@@ -206,15 +203,15 @@ class DatasetHandler(Dataset):
         indices_new = np.concatenate((self.indices, other.indices))
 
         return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
-    
-    def limit_class(self, max_num=None, labels: list=None):
+
+    def limit_class(self, labels: list=None, max_num=None, rand_num=None, seed=None):
         # indices_new = self.indices.copy()
         # classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
         label_l, label_d = self.fetch_ld()
-        
+
         if max_num is not None:
             # if max_num != self.fetch_classes():
                 # {k:len(v) for k, v in label_d.items()}
@@ -222,34 +219,34 @@ class DatasetHandler(Dataset):
             labels = sorted(list(dict(sorted(label_d.items(), key=lambda item: len(item[1]), reverse=True)[:max_num]).keys()))
             # else:
                 # return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
-        
+
+        if rand_num is not None:
+            rng = random.Random(seed)
+            labels = sorted(rng.sample(range(self.fetch_classes()), rand_num))
+
         classinfo_new = labels
         indices_new = np.array([], dtype=np.int32)
-        
+
         for label in labels:
             indices = label_d[label]
             indices_new = np.concatenate((indices_new, indices))
         indices_new = sorted(indices_new)
-        
+
         classinfo_new = {label: i for i, label in enumerate(classinfo_new)}
 
         return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def balance_label(self, seed=None):
-        # len(classinfo)ごとに取り出したとき、常に要素の数が極力均等になるようにデータセットのincicesを構成
-        # seed="arange"で、該当indeicesをクラスが若い順から順番に、indicesの小さい順でとってくる
+        # len(classinfo)ごとに取り出したとき、常に要素の数が極力均等になるようにデータセットのindicesを構成
+        # seed="arange"で、該当indicesをクラスが若い順から順番に、indicesの小さい順でとってくる
 
         # indices_new = self.indices.copy()
         classinfo_new = copy(self.classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
-        tmp = self.base_ds.u_seed
-        if tmp is not None:
-            seed = tmp
-
         if seed != "arange":
-            np.random.seed(seed)
+            rng = np.random.default_rng(seed=seed)
 
         label_l, label_d = self.fetch_ld()
 
@@ -280,7 +277,8 @@ class DatasetHandler(Dataset):
         for key in label_d.keys():
             perm = np.array(label_d[key])
             if seed != "arange":
-                perm = np.random.permutation(perm)
+                perm = rng.permutation(perm)
+                # perm = np.random.permutation(perm)
             shuffled_label_d[key] = perm
 
         # class_arrayでクラス、shuffled_label_dでindexを取得
@@ -289,7 +287,7 @@ class DatasetHandler(Dataset):
             value = shuffled_label_d[key][0]  # label_d[key]のリストから先頭の要素を取り出す
             indices_new.append(value)
             shuffled_label_d[key] = shuffled_label_d[key][1:]  # shuffled_label_d[key]のリストから先頭の要素を削除する
-            
+
         indices_new = np.array(indices_new, dtype=np.int32)
 
         return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
@@ -300,13 +298,6 @@ class DatasetHandler(Dataset):
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
-        tmp = self.base_ds.u_seed
-        if tmp is not None:
-            seed = tmp
-
-        if seed != "arange":
-            np.random.seed(seed)
-
         label_l, label_d = self.fetch_ld()
         for k, v in mult_dict.items():
             label_d[k] *= v
@@ -315,16 +306,16 @@ class DatasetHandler(Dataset):
         if seed == "arange":
             indices_new.sort()
         else:
-            np.random.seed(seed)
-            np.random.shuffle(indices_new)
+            rng = np.random.default_rng(seed=seed)
+            rng.shuffle(indices_new)
 
         return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
-    
+
     def fetch_classes(self, base=False, listed=False):
         classes = None
         if self.classinfo is None  or  base:
             blabel_l, blabel_d = self._fetch_base_info("ld")
-            
+
             if self.classinfo is None:
                 self.classinfo = list(blabel_d.keys())
 
@@ -337,7 +328,7 @@ class DatasetHandler(Dataset):
             # このelseに入らない場合、必ずdictではないため、この場所でok もう一つ上の階層でもOKでそのほうがわかりやすいが、この無駄な処理が増える
             if type(self.classinfo) is dict:
                 classes = self.classinfo.keys()
-            
+
         if listed:
             return classes
         else:
@@ -351,7 +342,7 @@ class DatasetHandler(Dataset):
         blabel_l, blabel_d = self._fetch_base_info("ld")
         if base:
             return blabel_l, blabel_d
-        
+
         else:
             label_l = []  # label のリストを作成
 
@@ -386,9 +377,9 @@ class DatasetHandler(Dataset):
 
         label_count_iv = [1.0 / len(label_d.get(i, [])) for i in range(classes)]  # インデックスが数字以外だと機能しない
         weight_tsr = torch.tensor(label_count_iv, dtype=torch.float) / sum(label_count_iv) * classes
-        
+
         return weight_tsr
-    
+
     def normalizer(self, base=True, inplace=True):
         ms_dict = self.calc_mean_std(base=base)
         mean, std = ms_dict["mean"], ms_dict["std"]
@@ -397,18 +388,29 @@ class DatasetHandler(Dataset):
     def calc_mean_std(self, base=False, batch_size=256, formatted=False):
         if base:
             return self._fetch_base_info("msd")
-        elem = None
+        # elem = None
+        # for inputs, _ in self.loader(batch_size, shuffle=False):
+        #     # p は、バッチの次元を除いたものが2次元データなら(1, 0, 2, 3)、1次元データなら(1, 0, 2)
+        #     p = torch.arange(len(inputs.shape))
+        #     p[0], p[1] = 1, 0
+        #     p = tuple(p)
+
+        #     elem_b = inputs.permute(p).reshape(inputs.shape[1], -1)
+        #     if elem is None:
+        #         elem = elem_b
+        #     else:
+        #         elem = torch.cat([elem, elem_b], dim=1)
+
+        elems = []
         for inputs, _ in self.loader(batch_size, shuffle=False):
             # p は、バッチの次元を除いたものが2次元データなら(1, 0, 2, 3)、1次元データなら(1, 0, 2)
             p = torch.arange(len(inputs.shape))
             p[0], p[1] = 1, 0
             p = tuple(p)
 
-            elem_b = inputs.permute(p).reshape(inputs.shape[1], -1)
-            if elem is None:
-                elem = elem_b
-            else:
-                elem = torch.cat([elem, elem_b], dim=1)
+            elems.append(inputs.permute(p).reshape(inputs.shape[1], -1))
+
+        elem = torch.cat(elems, dim=1)
 
         mean = elem.mean(dim=1).tolist()
         std = elem.std(dim=1).tolist()
@@ -483,9 +485,9 @@ class DatasetHandler(Dataset):
             ax.set_title(f"class_dist: {distance}")
             ax.legend()
             fig.show()
-        
+
         return distance
-    
+
     def load_data(self, batch_size=256, one_dim=False):
         all_inputs = None
         all_labels = None
@@ -500,12 +502,12 @@ class DatasetHandler(Dataset):
             else:
                 all_inputs = torch.cat([all_inputs, inputs], dim=0)
                 all_labels = torch.cat([all_labels, labels], dim=0)
-                
+
         return all_inputs, all_labels
-    
+
     # 未実装
     def _ds_to_folder(self, num, path):
-    #     path = Path(path)
+        #     path = Path(path)
     #     path.mkdir(parents=True, exist_ok=True)
     #     ds_it = iter(ds)
     #     for i in range(num):
@@ -536,7 +538,7 @@ class DatasetHandler(Dataset):
             obj = getattr(self, f"_make_{info}")()
             torch.save(obj, obj_path)
             print(f"Saved label data to the following path: {obj_path}")
-            
+
         return obj
 
     def _make_ld(self):
@@ -558,7 +560,7 @@ class DatasetHandler(Dataset):
 
     def _make_msd(self):
         ms_dict = self.base_ds.base_dsh.transform([torchvision.transforms.ToTensor()]).calc_mean_std(base=False)
-        
+
         return ms_dict
 
     def _make_map(self, transform_l=None, batch_size=256, feat_extracter=None, dim_reducer_f=None):
@@ -572,7 +574,7 @@ class DatasetHandler(Dataset):
             transform_l.append(torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=True))
             base_arc = resnet50(weights=ResNet50_Weights.DEFAULT)
             feat_extracter = torch.nn.Sequential(*list(base_arc.children())[:-1])
-            
+
         if dim_reducer_f is None:
             dim_reducer_f = UMAP(n_neighbors=50, min_dist=0.1).fit_transform
 

@@ -3,14 +3,14 @@ __pycache__/
 assets/datasets/
 mlruns/
 
-env*/
+/.venv/
 
 # *.csv
 *.zip
 *.pkl
 *.pt
 
-*/*/exp_*/runs/*/*.pt
+# */*/exp_*/runs/*/*.pt
 
 *.ckpt
 *.sqlite3

@@ -1,3 +1,0 @@
-Hello!
-This is a test program.
-end_of_file

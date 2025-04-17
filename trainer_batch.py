@@ -1,8 +1,12 @@
 import sys
+import os
 import io
+from datetime import datetime
 from time import time
 
 import torch
+import numpy as np
+import polars as pl
 from torchinfo import summary
 
 import utils
@@ -97,12 +101,14 @@ class TrainerUtils:
 
 
 class Trainer(TrainerUtils):
+    # time_log = TrainerUtils.time_log
     def __init__(self, network=None, loss_func=None, optimizer=None, scheduler_t=(None, None), device=None):
         super().__init__(device)
         self.network = network.to(self.device)
         self.loss_func = loss_func
         self.optimizer = optimizer
-        if scheduler_t == (None, None):
+
+        if scheduler_t[0] is not None:
             assert isinstance(scheduler_t, tuple), "scheduler_t must be a tuple"
             assert len(scheduler_t) == 2, "scheduler_t must have two elements"
             assert isinstance(scheduler_t[0], torch.optim.lr_scheduler.LRScheduler), "scheduler_t[0] must be a torch.optim.lr_scheduler type"
@@ -115,29 +121,13 @@ class Trainer(TrainerUtils):
     def train_1epoch(self, dl):
         self.network.train()
         total_loss = 0.0
-        total_corr = 0
+        total_corr = 0.0
 
         for inputs, labels in dl:
-            inputs = inputs.to(self.device)
-            labels = labels.to(self.device)
-
-            outputs = self.network(inputs)
-            loss = self.loss_func(outputs, labels)
-
-            preds = torch.argmax(outputs.detach(), dim=1)
-            corr = torch.sum(preds == labels.data).item()
-
-            # 通常は zero_grad -> bachward -> step
-            # 効率を考慮するなら backward -> step -> zero_grad
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-
-            total_loss += loss.item() * len(inputs)
+            outputs, loss, corr = self.train_1batch(inputs, labels)
+            total_loss += loss
             total_corr += corr
 
-            if self.scheduler_t[1] == "iter":
-                self.scheduler_t[0].step()
         if self.scheduler_t[1] == "epoch":
             self.scheduler_t[0].step()
 
@@ -145,7 +135,30 @@ class Trainer(TrainerUtils):
         train_acc = total_corr / len(dl.dataset)
 
         return train_loss, train_acc
+    
+    def train_1batch(self, inputs, labels):
+        inputs = inputs.to(self.device)
+        labels = labels.to(self.device)
 
+        outputs = self.network(inputs)
+        loss = self.loss_func(outputs, labels)
+
+        pred = torch.argmax(outputs.detach(), dim=1)
+        corr = torch.sum(pred == labels.data).item()
+
+        # 通常は zero_grad -> bachward -> step
+        # 効率を考慮するなら backward -> step -> zero_grad
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        loss = loss.item() * len(inputs)
+
+        if self.scheduler_t[1] == "iter":
+            self.scheduler_t[0].step()
+
+        return outputs, loss, corr
+        
     # @TrainerUtils.time_log("total_dur", mode="add")
     def val_1epoch(self, dl):
         if dl is None:
@@ -153,29 +166,35 @@ class Trainer(TrainerUtils):
 
         self.network.eval()
         total_loss = 0.0
-        total_corr = 0
+        total_corr = 0.0
 
         with torch.no_grad():
             for inputs, labels in dl:
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device)
-
-                outputs = self.network(inputs)
-                loss = self.loss_func(outputs, labels)
-
-                preds = torch.argmax(outputs.detach(), dim=1)
-                corr = torch.sum(preds == labels.data).item()
-
-                total_loss += loss.item() * len(inputs)
+                outputs, loss, corr = self.val_1batch(inputs, labels)
+                total_loss += loss
                 total_corr += corr
 
         val_loss = total_loss / len(dl.dataset)
         val_acc = total_corr / len(dl.dataset)
 
         return val_loss, val_acc
+    
+    def val_1batch(self, inputs, labels):
+        inputs = inputs.to(self.device)
+        labels = labels.to(self.device)
+
+        outputs = self.network(inputs)
+        loss = self.loss_func(outputs, labels)
+
+        pred = torch.argmax(outputs.detach(), dim=1)
+        loss = loss.item() * len(inputs)
+        corr = torch.sum(pred == labels.data).item()
+        
+        return outputs, loss, corr
 
     # @TrainerUtils.time_log("pred_dur", mode="add")
     def pred_1iter(self, dl, categorize=False):
+        self.network.eval()
         total_outputs = []
         total_labels = []
 
@@ -234,7 +253,13 @@ class Trainer(TrainerUtils):
             dl=None,
             input_size=(200, 3, 256, 256),
             verbose=1,
-            col_names=["input_size", "output_size", "kernel_size", "num_params", "mult_adds", ],
+            col_names=[
+                "input_size",
+                "output_size",
+                "kernel_size",
+                "num_params",
+                "mult_adds",
+                ],
             row_settings=["var_names"],
             ):
         if dl is not None:
@@ -300,32 +325,18 @@ class MultiTrainer(TrainerUtils):
         self.trainers = trainers
 
     def train_1epoch(self, dl):
-        total_losses = [0.0] * len(self.trainers)
-        total_corrs = [0] * len(self.trainers)
 
-        (trainer.network.train() for trainer in self.trainers)
+        total_losses = [0.0] * len(self.trainers)
+        total_corrs = [0.0] * len(self.trainers)
+
+        for trainer in self.trainers:
+            trainer.network.train()
 
         for inputs, labels in dl:
-            inputs = inputs.to(self.device)
-            labels = labels.to(self.device)
-
             for i, trainer in enumerate(self.trainers):
-                outputs = trainer.network(inputs)
-                loss = trainer.loss_func(outputs, labels)
-
-                preds = torch.argmax(outputs.detach(), dim=1)
-                corr = torch.sum(preds == labels.data).item()
-
-                trainer.optimizer.zero_grad()
-                loss.backward()
-                trainer.optimizer.step()
-
-                total_losses[i] += loss.item() * len(inputs)
+                outputs, loss, corr = trainer.train_1batch(inputs, labels)
+                total_losses[i] += loss
                 total_corrs[i] += corr
-
-            for trainer in self.trainers:
-                if trainer.scheduler_t[1] == "iter":
-                    trainer.scheduler_t[0].step()
 
         for trainer in self.trainers:
             if trainer.scheduler_t[1] == "epoch":
@@ -341,9 +352,10 @@ class MultiTrainer(TrainerUtils):
             return None, None
 
         total_losses = [0.0] * len(self.trainers)
-        total_corrs = [0] * len(self.trainers)
+        total_corrs = [0.0] * len(self.trainers)
 
-        (trainer.network.eval() for trainer in self.trainers)
+        for trainer in self.trainers:
+            trainer.network.eval()
 
         with torch.no_grad():
             for inputs, labels in dl:
@@ -351,13 +363,9 @@ class MultiTrainer(TrainerUtils):
                 labels = labels.to(self.device)
 
                 for i, trainer in enumerate(self.trainers):
-                    outputs = trainer.network(inputs)
-                    loss = trainer.loss_func(outputs, labels)
+                    outputs, loss, corr = trainer.val_1batch(inputs, labels)
 
-                    preds = torch.argmax(outputs.detach(), dim=1)
-                    corr = torch.sum(preds == labels.data).item()
-
-                    total_losses[i] += loss.item() * len(inputs)
+                    total_losses[i] += loss
                     total_corrs[i] += corr
 
         val_losses = [total_loss / len(dl.dataset) for total_loss in total_losses]
@@ -375,120 +383,6 @@ class MultiTrainer(TrainerUtils):
             return return_l
         return wrapper
 
+    def __getitem__(self, idx):
+        return self.trainers[idx]
 
-class MergeEnsemble(TrainerUtils):
-    def __init__(self, trainers=None, device=None):
-        super().__init__(device)
-        self.trainers = trainers
-        self.loss_func = trainers[0].loss_func
-
-    def train_1epoch(self, dl, ens_f=lambda outputs_t: torch.stack(outputs_t, dim=0).mean(dim=1), incl_members=False):
-        total_losses = [0.0] * len(self.trainers)
-        total_corrs = [0] * len(self.trainers)
-        
-        ens_total_loss = 0.0
-        ens_total_corr = 0
-
-        (trainer.network.train() for trainer in self.trainers)
-
-        for inputs, labels in dl:
-            inputs = inputs.to(self.device)
-            labels = labels.to(self.device)
-
-            outputs_t = (trainer.network(inputs) for trainer in self.trainers)
-            loss_t = (self.loss_func(outputs, labels) for outputs in outputs_t)
-            preds_t = (torch.argmax(outputs.detach(), dim=1) for outputs in outputs_t)
-            corr_t = (torch.sum(preds == labels.data).item() for preds in preds_t)
-
-            ens_outputs = ens_f(outputs_t)  # デフォルトでは平均をとる
-            ens_loss = self.loss_func(ens_outputs, labels)
-            ens_preds = torch.argmax(ens_outputs.detach(), dim=1)
-            ens_corr = torch.sum(ens_preds == labels.data).item()
-                
-            (trainer.optimizer.zero_grad() for trainer in self.trainers)
-            ens_loss.backward()
-            (trainer.optimizer.step() for trainer in self.trainers)
-
-            for i in len(self.trainers):
-                total_losses[i] += loss_t[i].item() * len(inputs)
-                total_corrs[i] += corr_t[i]
-            
-            ens_total_loss += ens_loss.item() * len(inputs)
-            ens_total_corr += ens_corr
-
-            for trainer in self.trainers:
-                if trainer.scheduler_t[1] == "iter":
-                    trainer.scheduler_t[0].step()
-
-        for trainer in self.trainers:
-            if trainer.scheduler_t[1] == "epoch":
-                trainer.scheduler_t[0].step()
-
-        train_losses = [ens_total_loss / len(dl.dataset) for ens_total_loss in total_losses]
-        train_accs = [ens_total_corr / len(dl.dataset) for ens_total_corr in total_corrs]
-
-        ens_train_loss = ens_total_loss / len(dl.dataset)
-        ens_train_acc = ens_total_corr / len(dl.dataset)
-        
-        if incl_members:
-            return (ens_train_loss, train_losses), (ens_train_acc, train_accs)
-        else:
-            return ens_train_loss, ens_train_acc
-
-    def val_1epoch(self, dl, ens_f=lambda outputs_t: torch.stack(outputs_t, dim=0).mean(dim=1), incl_members=False):
-        if dl is None:
-            return None, None
-
-        total_losses = [0.0] * len(self.trainers)
-        total_corrs = [0] * len(self.trainers)
-
-        ens_total_loss = 0.0
-        ens_total_corr = 0
-
-        (trainer.network.eval() for trainer in self.trainers)
-
-        with torch.no_grad():
-            for inputs, labels in dl:
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device)
-
-                for i, trainer in enumerate(self.trainers):
-                    outputs_t = (trainer.network(inputs) for trainer in self.trainers)
-                    loss_t = (self.loss_func(outputs, labels) for outputs in outputs_t)
-                    preds_t = (torch.argmax(outputs.detach(), dim=1) for outputs in outputs_t)
-                    corr_t = (torch.sum(preds == labels.data).item() for preds in preds_t)
-
-                    ens_outputs = ens_f(outputs_t)  # デフォルトでは平均をとる
-                    ens_loss = self.loss_func(ens_outputs, labels)
-                    ens_preds = torch.argmax(ens_outputs.detach(), dim=1)
-                    ens_corr = torch.sum(ens_preds == labels.data).item()
-
-                for i in len(self.trainers):
-                    total_losses[i] += loss_t[i].item() * len(inputs)
-                    total_corrs[i] += corr_t[i]
-
-                ens_total_loss += ens_loss.item() * len(inputs)
-                ens_total_corr += ens_corr
-
-        val_losses = [ens_total_loss / len(dl.dataset) for ens_total_loss in total_losses]
-        val_accs = [ens_total_corr / len(dl.dataset) for ens_total_corr in total_corrs]
-
-        ens_val_loss = ens_total_loss / len(dl.dataset)
-        ens_val_acc = ens_total_corr / len(dl.dataset)
-        
-        if incl_members:
-            return (ens_val_loss, val_losses), (ens_val_acc, val_accs)
-        else:
-            return ens_val_loss, ens_val_acc
-
-    def __getattr__(self, attr):
-        def wrapper(*args, **kwargs):
-            return_l = []
-            for i, trainer in enumerate(self.trainers):
-                new_args = [arg[i] if isinstance(arg, list) and len(arg) == len(self.trainers) else arg for arg in args]
-                new_kwargs = {k: v[i] if isinstance(v, list) and len(v) == len(self.runs) else v for k, v in kwargs.items()}
-                return_l.append(getattr(trainer, attr)(*new_args, **new_kwargs))
-            return return_l
-        return wrapper
-
-    

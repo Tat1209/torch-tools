@@ -8,8 +8,7 @@ import torchvision
 from torch.utils.data import Dataset
 from torchvision.datasets.vision import VisionDataset
 
-from dataset_hundler import DatasetHandler
-
+from dataset_handler import DatasetHandler
 
 class FixRandomDataset(Dataset):
     def __init__(self, size):
@@ -93,7 +92,6 @@ class TinyImageNet(VisionDataset):
                     self.paths.append(image_path)
                     self.targets.append(self.dirname_label[class_name])
             
-
         self.transform = transform
         self.target_transform = target_transform
 
@@ -114,59 +112,65 @@ class Datasets:
     def __init__(self, root=None):
         self.root = Path(root)
 
-    def _base_ds(self, ds_str):
+    def _base_ds(self, ds_str, download=False):
         match (ds_str):
             case "mnist_train":
-                return torchvision.datasets.MNIST(root=self.root, train=True)
+                return torchvision.datasets.MNIST(root=self.root, train=True, download=download)
             case "mnist_val":
-                return torchvision.datasets.MNIST(root=self.root, train=False)
+                return torchvision.datasets.MNIST(root=self.root, train=False, download=download)
             case "cifar100_train":
-                return torchvision.datasets.CIFAR100(root=self.root, train=True)
+                return torchvision.datasets.CIFAR100(root=self.root, train=True, download=download)
             case "cifar100_val":
-                return torchvision.datasets.CIFAR100(root=self.root, train=False)
+                return torchvision.datasets.CIFAR100(root=self.root, train=False, download=download)
             case "cifar10_train":
-                return torchvision.datasets.CIFAR10(root=self.root, train=True)
+                return torchvision.datasets.CIFAR10(root=self.root, train=True, download=download)
             case "cifar10_val":
-                return torchvision.datasets.CIFAR10(root=self.root, train=False)
+                return torchvision.datasets.CIFAR10(root=self.root, train=False, download=download)
             case "stl10_train":
-                return torchvision.datasets.STL10(root=self.root, split="train")
+                return torchvision.datasets.STL10(root=self.root, split="train", download=download)
             case "stl10_val":
-                return torchvision.datasets.STL10(root=self.root, split="test")
+                return torchvision.datasets.STL10(root=self.root, split="test", download=download)
             case "caltech101_trainval":
-                return torchvision.datasets.Caltech101(root=self.root, target_type="category")
+                return torchvision.datasets.Caltech101(root=self.root, target_type="category", download=download)
             case "tiny-imagenet_train":
                 return TinyImageNet(root=self.root, train=True)
             case "tiny-imagenet_val":
                 return TinyImageNet(root=self.root, train=False)
             case "cars_train":
-                return torchvision.datasets.StanfordCars(root=self.root, split="train")
+                return torchvision.datasets.StanfordCars(root=self.root, split="train", download=download)
             case "cars_val":
-                return torchvision.datasets.StanfordCars(root=self.root, split="test")
+                return torchvision.datasets.StanfordCars(root=self.root, split="test", download=download)
             case "pets_train":
-                return torchvision.datasets.OxfordIIITPet(root=self.root, split="trainval", target_types="category")
+                return torchvision.datasets.OxfordIIITPet(root=self.root, split="trainval", target_types="category", download=download)
             case "pets_val":
-                return torchvision.datasets.OxfordIIITPet(root=self.root, split="test", target_types="category")
+                return torchvision.datasets.OxfordIIITPet(root=self.root, split="test", target_types="category", download=download)
             case "flowers_train":
-                return torchvision.datasets.Flowers102(root=self.root, split="train")
+                return torchvision.datasets.Flowers102(root=self.root, split="train", download=download)
             case "flowers_val":
-                return torchvision.datasets.Flowers102(root=self.root, split="val")
+                return torchvision.datasets.Flowers102(root=self.root, split="val", download=download)
             case "flowers_test":
-                return torchvision.datasets.Flowers102(root=self.root, split="test")
+                return torchvision.datasets.Flowers102(root=self.root, split="test", download=download)
             case "imagenet":
                 return torchvision.datasets.ImageNet(root=self.root, split="val")
             case "mnist_ddim":
                 return torchvision.datasets.ImageFolder(root=str(Path(self.root) / Path("mnist_ddim")))
             case "ai-step_l":
-                return PklToDataset(f"{self.root}fukui_train_32_60_ver2.pkl")
+                return PklToDataset(self.root / Path("fukui_train_32_60_ver2.pkl"))
             case "ai-step_ul":
-                return PklToDataset(f"{self.root}kanazawa_test_32_60_ver2.pkl")
+                return PklToDataset(self.root / Path("kanazawa_test_32_60_ver2.pkl"))
             case "fix_rand":
                 return FixRandomDataset((3, 32, 32))
             case _:
-                raise Exception("Invalid name.")
+                raise ValueError(f"Invalid dataset name: {ds_str}")
 
     def __call__(self, ds_str, transform_l=[], target_transform_l=[], u_seed=None):
-        base_ds = self._base_ds(ds_str)
+        try:
+            base_ds = self._base_ds(ds_str)
+        except RuntimeError:
+            try:
+                base_ds = self._base_ds(ds_str, download=True)
+            except (RuntimeError, FileNotFoundError) as e:
+                raise e(f"The 'download' argument is not supported for this dataset.")
         base_ds.ds_str = ds_str
         base_ds.ds_name = base_ds.__class__.__name__
         base_ds.u_seed = u_seed

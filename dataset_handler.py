@@ -15,13 +15,13 @@ import matplotlib.pyplot as plt
 from trainer import Trainer
 
 
-# クラスの数を減らすなら、indicesのほかにclassinfo (ラベル名を保管しているリスト) を作ってそれも毎回コピる必要がある。その後、__getitem__のtargetを修正する必要あり
+# クラスの数を減らすなら、indicesのほかに_classinfo (ラベル名を保管しているリスト) を作ってそれも毎回コピる必要がある。その後、__getitem__のtargetを修正する必要あり
 class DatasetHandler(Dataset):
     # self.indicesは、常にnp.array(), label_l, label_dのvalueはlist
-    def __init__(self, base_ds, indices, classinfo, transform, target_transform):
+    def __init__(self, base_ds, indices, _classinfo, transform, target_transform):
         self.base_ds = base_ds
         self.indices = indices
-        self.classinfo = classinfo
+        self._classinfo = _classinfo
         self._transform = transform
         self._target_transform = target_transform
 
@@ -31,8 +31,8 @@ class DatasetHandler(Dataset):
     def __getitem__(self, idx):
         data, target = self.base_ds[self.indices[idx]]
 
-        if type(self.classinfo) is dict:
-            target = self.classinfo[target]
+        if type(self._classinfo) is dict:
+            target = self._classinfo[target] # targetをクラス名からインデックスに変換
 
         if self._transform:
             data = self._transform(data)
@@ -51,7 +51,7 @@ class DatasetHandler(Dataset):
 
     def transform(self, transform_l):
         indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
+        classinfo_new = copy(self._classinfo)
         # transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -60,7 +60,7 @@ class DatasetHandler(Dataset):
 
     def target_transform(self, target_transform_l):
         indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
+        classinfo_new = copy(self._classinfo)
         transform_new = copy(self._transform)
         # target_transform_new = copy(self._target_transform)
 
@@ -69,7 +69,7 @@ class DatasetHandler(Dataset):
 
     def in_ndata(self, a, b=None):
         # indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
+        classinfo_new = copy(self._classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
         range_t = (a, b) if b else (0, a)
@@ -83,7 +83,7 @@ class DatasetHandler(Dataset):
 
     def ex_ndata(self, a, b=None):
         # indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
+        classinfo_new = copy(self._classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -99,7 +99,7 @@ class DatasetHandler(Dataset):
 
     def in_ratio(self, a, b=None):
         # indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
+        classinfo_new = copy(self._classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
         range_t = (a, b) if b else (0, a)
@@ -113,7 +113,7 @@ class DatasetHandler(Dataset):
 
     def ex_ratio(self, a, b=None):
         # indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
+        classinfo_new = copy(self._classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -129,12 +129,12 @@ class DatasetHandler(Dataset):
 
     def split_ratio(self, ratio, balance_label=False, seed=None):
         # indices_new = self.indices.copy()
-        classes_a_new = copy(self.classinfo)
+        classes_a_new = copy(self._classinfo)
         transform_a_new = copy(self._transform)
         target_transform_a_new = copy(self._target_transform)
 
         # indices_new = self.indices.copy()
-        classes_b_new = copy(self.classinfo)
+        classes_b_new = copy(self._classinfo)
         transform_b_new = copy(self._transform)
         target_transform_b_new = copy(self._target_transform)
 
@@ -181,7 +181,7 @@ class DatasetHandler(Dataset):
     def shuffle(self, seed=None):
         # データセットそのものの順序をシャッフル ただし、ロードごとにシャッフルしたいならDataLoaderでシャッフルさせるべき
         indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
+        classinfo_new = copy(self._classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -196,7 +196,7 @@ class DatasetHandler(Dataset):
     # classの処理がされていない
     def __add__(self, other):
         # indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
+        classinfo_new = copy(self._classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -206,7 +206,7 @@ class DatasetHandler(Dataset):
 
     def limit_class(self, labels: list=None, max_num=None, rand_num=None, seed=None):
         # indices_new = self.indices.copy()
-        # classinfo_new = copy(self.classinfo)
+        # classinfo_new = copy(self._classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -237,11 +237,11 @@ class DatasetHandler(Dataset):
         return DatasetHandler(self.base_ds, indices_new, classinfo_new, transform_new, target_transform_new)
 
     def balance_label(self, seed=None):
-        # len(classinfo)ごとに取り出したとき、常に要素の数が極力均等になるようにデータセットのindicesを構成
+        # len(_classinfo)ごとに取り出したとき、常に要素の数が極力均等になるようにデータセットのindicesを構成
         # seed="arange"で、該当indicesをクラスが若い順から順番に、indicesの小さい順でとってくる
 
         # indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
+        classinfo_new = copy(self._classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -294,7 +294,7 @@ class DatasetHandler(Dataset):
 
     def mult_label(self, mult_dict=None, seed=None):
         # indices_new = self.indices.copy()
-        classinfo_new = copy(self.classinfo)
+        classinfo_new = copy(self._classinfo)
         transform_new = copy(self._transform)
         target_transform_new = copy(self._target_transform)
 
@@ -313,21 +313,21 @@ class DatasetHandler(Dataset):
 
     def fetch_classes(self, base=False, listed=False):
         classes = None
-        if self.classinfo is None  or  base:
+        if self._classinfo is None  or  base:
             blabel_l, blabel_d = self._fetch_base_info("ld")
 
-            if self.classinfo is None:
-                self.classinfo = list(blabel_d.keys())
+            if self._classinfo is None:
+                self._classinfo = list(blabel_d.keys())
 
             if base:
                 classes = list(blabel_d.keys())
             else:
-                classes = self.classinfo
+                classes = self._classinfo
         else:
-            classes = self.classinfo
+            classes = self._classinfo
             # このelseに入らない場合、必ずdictではないため、この場所でok もう一つ上の階層でもOKでそのほうがわかりやすいが、この無駄な処理が増える
-            if type(self.classinfo) is dict:
-                classes = self.classinfo.keys()
+            if type(self._classinfo) is dict:
+                classes = self._classinfo.keys()
 
         if listed:
             return classes

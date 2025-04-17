@@ -199,6 +199,9 @@ class RunManager(PathManager):
                     df.write_csv(self.exp_path / Path(fname)) # fpath は使わない
 
             return df
+        
+    def child_run(self):
+        return RunManager(exp_path=self.run_path)
             
 
 class RunsManager:

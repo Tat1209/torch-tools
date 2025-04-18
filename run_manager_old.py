@@ -208,109 +208,48 @@ class RunsManager:
     def __init__(self, runs):
         self.runs = runs
 
-    # def __getattr__(self, attr):
-    #     def wrapper(*args, **kwargs):
-    #         return_l = []
-    #         for i, run in enumerate(self.runs):
-    #             new_args = [arg[i] if isinstance(arg, list) and len(arg) == len(self.runs) else arg for arg in args]
-    #             new_kwargs = {k: v[i] if isinstance(v, list) and len(v) == len(self.runs) else v for k, v in kwargs.items()}
-    #             return_l.append(getattr(run, attr)(*new_args, **new_kwargs))
-    #         return return_l
-    #     return wrapper
-    
-    # こいつらはこのままの形式だと格納できないから特別　要素数と同じ大きさのlistであれば自動で処理されるが、引数がdictであるため別に定義
-    # def log_param(self, name, value):
-    #     self.log_params({name: value})
-
-    # def log_params(self, stored_dict):
-    #     for i, run in enumerate(self.runs):
-    #         sd_run = dict()
-    #         for k, v in stored_dict.items():
-    #             v_tmp = v[i] if isinstance(v, list) and len(v) == len(self.runs) else v
-    #             sd_run[k] = v_tmp
-    #         run.log_params(sd_run)
-
-    # def log_metric(self, name, value, step):
-    #     self.log_metrics({name: value}, step=step)
-
-    # def log_metrics(self, stored_dict, step):
-    #     if isinstance(stored_dict, list) and len(stored_dict) == len(self.runs):
-    #         for run, sd_run in zip(self.runs, stored_dict):
-    #             run.log_metrics(sd_run, step=step)
-                
-    #     if isinstance(stored_dict, dict):
-    #         for i, run in enumerate(self.runs):
-    #             sd_run = dict()
-    #             for k, v in stored_dict.items():
-    #                 v_tmp = v[i] if isinstance(v, list) and len(v) == len(self.runs) else v
-    #                 sd_run[k] = v_tmp
-    #             run.log_metrics(sd_run, step=step)
-    
     def __getattr__(self, attr):
         def wrapper(*args, **kwargs):
-            # 各 run に対応する空の args/kwargs を準備
-            n = len(self.runs)
-            new_args = [[] for _ in range(n)]
-            new_kwargs = [{} for _ in range(n)]
-
-            # 位置引数の振り分け
-            for arg in args:
-                if isinstance(arg, list) and len(arg) == n:
-                    # run ごとのリストなら要素ごとに分配
-                    for i in range(n):
-                        new_args[i].append(arg[i])
-
-                elif isinstance(arg, dict):
-                    # dict はまず各 run 用の辞書を構築
-                    per_dicts = [ {} for _ in range(n) ]
-                    for k, v in arg.items():
-                        pairable = isinstance(v, list) and len(v) == n
-                        for i in range(n):
-                            per_dicts[i][k] = v[i] if pairable else v
-                    # キー全体を処理したあとで append
-                    for i in range(n):
-                        new_args[i].append(per_dicts[i])
-
-                else:
-                    # それ以外は全 run に同じ値を追加
-                    for i in range(n):
-                        new_args[i].append(arg)
-
-            # キーワード引数の振り分け
-            for kw, val in kwargs.items():
-                if isinstance(val, list) and len(val) == n:
-                    # run ごとのリストなら要素ごとに分配
-                    for i in range(n):
-                        new_kwargs[i][kw] = val[i]
-
-                elif isinstance(val, dict):
-                    # dict はまず各 run 用の辞書を構築
-                    per_dicts = [ {} for _ in range(n) ]
-                    for k, v in val.items():
-                        pairable = isinstance(v, list) and len(v) == n
-                        for i in range(n):
-                            per_dicts[i][k] = v[i] if pairable else v
-                    # キー全体を処理したあとで代入
-                    for i in range(n):
-                        new_kwargs[i][kw] = per_dicts[i]
-
-                else:
-                    # それ以外は全 run に同じ値を設定
-                    for i in range(n):
-                        new_kwargs[i][kw] = val
-
-                # 各 run を実行して結果を collect
-                results = []
-                for run, a, kw in zip(self.runs, new_args, new_kwargs):
-                    results.append(getattr(run, attr)(*a, **kw))
-                return results
+            return_l = []
+            for i, run in enumerate(self.runs):
+                new_args = [arg[i] if isinstance(arg, list) and len(arg) == len(self.runs) else arg for arg in args]
+                new_kwargs = {k: v[i] if isinstance(v, list) and len(v) == len(self.runs) else v for k, v in kwargs.items()}
+                return_l.append(getattr(run, attr)(*new_args, **new_kwargs))
+            return return_l
         return wrapper
+    
+    # こいつらはこのままの形式だと格納できないから特別　要素数と同じ大きさのlistであれば自動で処理されるが、引数がdictであるため別に定義
+    def log_param(self, name, value):
+        self.log_params({name: value})
+
+    def log_params(self, stored_dict):
+        for i, run in enumerate(self.runs):
+            sd_run = dict()
+            for k, v in stored_dict.items():
+                v_tmp = v[i] if isinstance(v, list) and len(v) == len(self.runs) else v
+                sd_run[k] = v_tmp
+            run.log_params(sd_run)
+
+    def log_metric(self, name, value, step):
+        self.log_metrics({name: value}, step=step)
+
+    def log_metrics(self, stored_dict, step):
+        if isinstance(stored_dict, list) and len(stored_dict) == len(self.runs):
+            for run, sd_run in zip(self.runs, stored_dict):
+                run.log_metrics(sd_run, step=step)
+                
+        if isinstance(stored_dict, dict):
+            for i, run in enumerate(self.runs):
+                sd_run = dict()
+                for k, v in stored_dict.items():
+                    v_tmp = v[i] if isinstance(v, list) and len(v) == len(self.runs) else v
+                    sd_run[k] = v_tmp
+                run.log_metrics(sd_run, step=step)
 
     def __getitem__(self, idx):
         return self.runs[idx]
 
     
-
 class RunViewer(RunManager, PathManager):
     def __init__(self, exc_path=None, exp_name="exp_default", exp_path=None, run_id=None):
         PathManager.__init__(self, exc_path, exp_name, exp_path)

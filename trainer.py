@@ -376,6 +376,120 @@ class MultiTrainer(TrainerUtils):
         return wrapper
 
 
+class Ensemble(TrainerUtils):
+    def __init__(self, trainers=None, device=None):
+        super().__init__(device)
+        self.trainers = trainers
+
+    # @TrainerUtils.time_log("train_dur", mode="add")
+    # @TrainerUtils.time_log("total_dur", mode="add")
+    def train_1epoch(self, dl):
+        pass
+
+    # @TrainerUtils.time_log("total_dur", mode="add")
+    def val_1epoch(self, dl):
+        pass
+
+    # @TrainerUtils.time_log("pred_dur", mode="add")
+    def pred_1iter(self, dl, categorize=False):
+        pass
+    
+    def timeinfo(self):
+        time_info = super().timeinfo()
+        # for k, v in self.time_data.items():
+        #     time_info[k] = v
+        #     k_fmt = k + "_fmt"
+        #     if k.endswith("_dur"):
+        #         time_info[k_fmt] = utils.format_duration(v, style=0)
+        #     elif k.endswith("_time"):
+        #         time_info[k_fmt] = utils.format_time(v, style=1)
+
+        return time_info
+
+        return self.network.state_dict()
+
+    def load_sd(self, sd_path):
+        sd = torch.load(sd_path)
+        self.network.load_state_dict(sd)
+
+    def get_lr(self):
+        # return self.scheduler_t[0].get_lr()[0]
+        return self.scheduler_t[0].get_last_lr()[0] # recommended
+        # return self.optimizer.param_groups[0]["lr"]
+
+    def count_params(self):
+        return sum(p.numel() for p in self.network.parameters())
+
+    def count_trainable_params(self):
+        return sum(p.numel() for p in self.network.parameters() if p.requires_grad)
+
+    def arc_check(
+            self,
+            out_file=False,
+            fname="arccheck.txt",
+            dl=None,
+            input_size=(200, 3, 256, 256),
+            verbose=1,
+            col_names=["input_size", "output_size", "kernel_size", "num_params", "mult_adds", ],
+            row_settings=["var_names"],
+            ):
+        if dl is not None:
+            inputs, _ = next(iter(dl))
+            input_size = inputs.shape
+        try:
+            tmp_out = io.StringIO()
+            sys.stdout = tmp_out
+            summary(
+                    model=self.network,
+                    input_size=input_size,
+                    verbose=verbose,
+                    col_names=col_names,
+                    row_settings=row_settings,
+                    )
+        finally:
+            sys.stdout = sys.__stdout__
+        summary_str = tmp_out.getvalue()
+
+        if out_file:
+            with open(fname, "w") as f:
+                f.write(summary_str)
+
+        return summary_str
+
+    def repr_network(self):
+        return repr(self.network)
+
+    def repr_loss_func(self):
+        return repr(self.loss_func)
+
+    def repr_optimizer(self, use_break=False):
+        string = repr(self.optimizer)
+        if not use_break:
+            string = string.replace("\n", " ")
+        return string
+
+    def repr_scheduler(self, use_break=False):
+        if self.scheduler_t is None:
+            return None
+        else:
+            format_string = self.scheduler_t[0].__class__.__name__ + " (\n"
+            for attr in dir(self.scheduler_t[0]):
+                if not attr.startswith("_") and not callable(getattr(self.scheduler_t[0], attr)):  # exclude special attributes and methods
+                    if attr.startswith("optimizer"):
+                        value = f"{getattr(self.scheduler_t[0], attr).__class__.__name__}()"
+                    else:
+                        value = getattr(self.scheduler_t[0], attr)
+                    format_string += f"{attr} = {value}\n"
+            format_string += ")"
+
+            if not use_break:
+                format_string = format_string.replace("\n", " ")
+            return format_string
+
+    def repr_device(self):
+        return repr(self.device)
+
+
 class MergeEnsemble(TrainerUtils):
     def __init__(self, trainers=None, device=None):
         super().__init__(device)
@@ -452,16 +566,15 @@ class MergeEnsemble(TrainerUtils):
                 inputs = inputs.to(self.device)
                 labels = labels.to(self.device)
 
-                for i, trainer in enumerate(self.trainers):
-                    outputs_t = (trainer.network(inputs) for trainer in self.trainers)
-                    loss_t = (self.loss_func(outputs, labels) for outputs in outputs_t)
-                    preds_t = (torch.argmax(outputs.detach(), dim=1) for outputs in outputs_t)
-                    corr_t = (torch.sum(preds == labels.data).item() for preds in preds_t)
+                outputs_t = (trainer.network(inputs) for trainer in self.trainers)
+                loss_t = (self.loss_func(outputs, labels) for outputs in outputs_t)
+                preds_t = (torch.argmax(outputs.detach(), dim=1) for outputs in outputs_t)
+                corr_t = (torch.sum(preds == labels.data).item() for preds in preds_t)
 
-                    ens_outputs = ens_f(outputs_t)  # デフォルトでは平均をとる
-                    ens_loss = self.loss_func(ens_outputs, labels)
-                    ens_preds = torch.argmax(ens_outputs.detach(), dim=1)
-                    ens_corr = torch.sum(ens_preds == labels.data).item()
+                ens_outputs = ens_f(outputs_t)  # デフォルトでは平均をとる
+                ens_loss = self.loss_func(ens_outputs, labels)
+                ens_preds = torch.argmax(ens_outputs.detach(), dim=1)
+                ens_corr = torch.sum(ens_preds == labels.data).item()
 
                 for i in len(self.trainers):
                     total_losses[i] += loss_t[i].item() * len(inputs)

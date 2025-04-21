@@ -241,7 +241,9 @@ class ResNet(nn.Module):
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                # nn.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu") # official implementation
+                for w in m.weight.chunk(m.groups, dim=0):
+                    torch.nn.init.kaiming_normal_(w, mode='fan_out', nonlinearity='relu') # groups を指定した場合にも、適切な分散で初期化されるように
             elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)

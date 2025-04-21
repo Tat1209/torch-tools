@@ -35,6 +35,20 @@ def torch_fix_seed(seed=42):
     torch.use_deterministic_algorithms = True
 
 def format_duration(duration_s, style=0) -> str:
+    """
+    Converts a duration in seconds to a human-readable format.
+
+    Args:
+        duration_s (float): Duration in seconds to be formatted.
+        style (int, optional): 
+            Formatting style. 
+            - 0: Single highest unit (e.g., "1.5ms")
+            - 1: Two-level breakdown (e.g., "1m23s")
+            Defaults to 0.
+
+    Returns:
+        str: Formatted duration string.
+    """
     duration_ns = duration_s * 1e9
     units = [("ns", 1), ("μs", 1000), ("ms", 1000), ("s", 1000), ("m", 60), ("h", 60), ("d", 24), ("w", 7), ("x", 10000)]
     # units = [("ns", 1), ("μs", 1000), ("ms", 1000), ("s", 1000), ("m", 60), ("h", 60), ("d", 24), ("y", 365), ("c", 100), ("e", 10)]

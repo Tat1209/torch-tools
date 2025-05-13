@@ -28,6 +28,7 @@ class FixRandomDataset(Dataset):
 
 class PklToDataset(Dataset):
     def __init__(self, pkl_path, transform=None, target_transform=None):
+        # この実装どうなん？一気にデータ取得するからあまりよくない気がする．改善できればしたい．
         with open(pkl_path, "rb") as f:
             (self.datas, self.targets) = pickle.load(f)
         self.transform = transform

@@ -78,7 +78,7 @@ class RunManager(PathManager):
             run_id = max(dir_nums) + 1
         return run_id
 
-    def log_text(self, text, fname):
+    def log_text(self, fname, text):
         with open(self.fpath(fname), "w") as fh:
             fh.write(text)
 

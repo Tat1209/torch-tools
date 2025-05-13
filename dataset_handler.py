@@ -15,7 +15,6 @@ import matplotlib.pyplot as plt
 from trainer import Trainer
 
 
-# クラスの数を減らすなら、indicesのほかに_classinfo (ラベル名を保管しているリスト) を作ってそれも毎回コピる必要がある。その後、__getitem__のtargetを修正する必要あり
 class DatasetHandler(Dataset):
     # self.indicesは、常にnp.array(), label_l, label_dのvalueはlist
     def __init__(self, base_ds, indices, _classinfo, transform, target_transform):

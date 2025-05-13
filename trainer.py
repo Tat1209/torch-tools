@@ -7,6 +7,136 @@ from torchinfo import summary
 
 import utils
 
+class Network:
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+
+    def get_sd(self):
+        return self._wrapped.state_dict()
+
+    def load_sd(self, sd_path):
+        sd = torch.load(sd_path)
+        self._wrapped.load_state_dict(sd)
+
+    def count_params(self):
+        return sum(p.numel() for p in self._wrapped.parameters())
+
+    def count_params_trainable(self):
+        return sum(p.numel() for p in self._wrapped.parameters() if p.requires_grad)
+
+    def count_params_with_grad(self):
+        return sum(p.grad.numel() for p in self._wrapped.parameters() if p.grad is not None)
+
+    def grad_mean(self, abs=True):
+
+        grads = []
+        for param in self._wrapped.parameters():
+            if param.grad is not None:
+                grads.append(param.grad.view(-1))
+        all_grads = torch.cat(grads)
+        grad_mean = all_grads.mean().item()      # 平均勾配
+        grad_abs_mean = all_grads.abs().mean().item()
+        if abs:
+            return grad_abs_mean
+        else:
+            return grad_mean
+
+    def torchinfo(self,
+                  dl=None,
+                  input_size=(1, 3, 224, 224),
+                  batch_dim=None,
+                  verbose=1,
+                  depth=4,
+                  col_names=["input_size", "output_size", "kernel_size", "num_params", "mult_adds", ],
+                  row_settings=["var_names"],
+                  ):
+        if dl is not None:
+            inputs, _ = next(iter(dl))
+            input_size = inputs.shape
+
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        summary(model=self._wrapped, input_size=input_size, batch_dim=batch_dim, depth=depth, verbose=verbose, col_names=col_names, row_settings=row_settings)
+        sys.stdout = old_stdout
+        summary_str = buf.getvalue()
+
+        return summary_str
+
+    def repr_network(self):
+        return repr(self._wrapped)
+
+    def __getattr__(self, name):
+        orig = getattr(self._wrapped, name)
+
+        if callable(orig):
+            # return a function that, when called, wraps Module results
+            def hooked(*args, **kwargs):
+                result = orig(*args, **kwargs)
+                if isinstance(result, torch.nn.Module):
+                    return Network(result)
+                return result
+            return hooked
+
+        return orig
+
+    def __call__(self, *args, **kwargs):
+        return self._wrapped.__call__(*args, **kwargs)
+
+class Networks(list):
+    def __init__(self, networks=None, merge=False, merge_f=lambda networks: sum(networks)):
+        # Networkインスタンスのリストを想定
+        super().__init__(networks if networks is not None else [])
+        self.merge = merge
+        self.merge_f = merge_f
+
+    def count_params(self):
+        if self.merge:
+            return self.merge_f(network.count_params() for network in self)
+        else:
+            return [network.count_params() for network in self]
+
+    def count_params_trainable(self):
+        if self.merge:
+            return self.merge_f(network.count_params_trainable() for network in self)
+        else:
+            return [network.count_params_trainable() for network in self]
+
+    def count_params_with_grad(self):
+        if self.merge:
+            return self.merge_f(network.count_params_with_grad() for network in self)
+        else:
+            return [network.count_params_with_grad() for network in self]
+
+    def parameters(self):
+        if self.merge:
+            for network in self:
+                for p in network.parameters():
+                    yield p
+        # return (p for network in self for p in network.parameters())
+        else:
+            for network in self:
+                yield network.parameters()
+
+    def to(self, device):
+        moved = [network.to(device) for network in self]
+        return Networks(moved)
+
+    def __repr__(self):
+        return f"Networks({list(self)})"
+    
+    def __getattr__(self, attr):
+        # ここにないやつは各Networkに投げ，その結果のリストを返す
+        def wrapper(*args, **kwargs):
+            return_l = []
+            for i, network in enumerate(self):
+                new_args = [arg[i] if isinstance(arg, list) and len(arg) == len(self) else arg for arg in args]
+                new_kwargs = {k: v[i] if isinstance(v, list) and len(v) == len(self) else v for k, v in kwargs.items()}
+                return_l.append(getattr(network, attr)(*new_args, **new_kwargs))
+            return return_l
+        return wrapper
+
+
 class TrainerUtils:
     def __init__(self, device):
         if device is None:
@@ -113,12 +243,13 @@ class TrainerUtils:
 
 
 class Trainer(TrainerUtils):
-    def __init__(self, network=None, loss_func=None, optimizer=None, scheduler_t=(None, None), device=None):
+    def __init__(self, network=None, criterion=None, optimizer=None, scheduler_t=(None, None), device=None):
         super().__init__(device)
-        self.network = network.to(self.device)
-        self.loss_func = loss_func
+        if network is not None:
+            self.network = network.to(self.device)
+        self.criterion = criterion
         self.optimizer = optimizer
-        if scheduler_t == (None, None):
+        if scheduler_t != (None, None):
             assert isinstance(scheduler_t, tuple), "scheduler_t must be a tuple"
             assert len(scheduler_t) == 2, "scheduler_t must have two elements"
             assert isinstance(scheduler_t[0], torch.optim.lr_scheduler.LRScheduler), "scheduler_t[0] must be a torch.optim.lr_scheduler type"
@@ -178,7 +309,7 @@ class Trainer(TrainerUtils):
 
     def model_flow(self, inputs, labels):
         outputs = self.network(inputs)
-        loss = self.loss_func(outputs, labels)
+        loss = self.criterion(outputs, labels)
 
         return outputs, loss
 
@@ -196,10 +327,11 @@ class Trainer(TrainerUtils):
         self.optimizer.step()
 
     # @TrainerUtils.time_log("pred_dur", mode="add")
-    def pred_1iter(self, dl, categorize=False):
+    def pred_1iter(self, dl, categorize=True):
         total_outputs = []
         total_labels = []
 
+        self.network.eval()
         with torch.no_grad():
             for inputs, labels in dl:
                 inputs = inputs.to(self.device)
@@ -230,78 +362,13 @@ class Trainer(TrainerUtils):
 
         return time_info
 
-    def get_sd(self):
-        return self.network.state_dict()
-
-    def load_sd(self, sd_path):
-        sd = torch.load(sd_path)
-        self.network.load_state_dict(sd)
-
     def get_lr(self):
         # return self.scheduler_t[0].get_lr()[0]
         return self.scheduler_t[0].get_last_lr()[0] # recommended
     # return self.optimizer.param_groups[0]["lr"]
 
-    def count_params(self):
-        return sum(p.numel() for p in self.network.parameters())
-
-    def count_trainable_params(self):
-        return sum(p.numel() for p in self.network.parameters() if p.requires_grad)
-
-    def count_params_with_grad(self):
-        return sum(p.grad.numel() for p in self.network.parameters() if p.grad is not None)
-    
-    def grad_mean(self, abs=True):
-        grads = []
-        for param in self.network.parameters():
-            if param.grad is not None:
-                grads.append(param.grad.view(-1))
-        all_grads = torch.cat(grads)  # turn0search3
-        grad_mean = all_grads.mean().item()      # 平均勾配
-        grad_abs_mean = all_grads.abs().mean().item()
-        if abs:
-            return grad_abs_mean
-        else:
-            return grad_mean
-
-    def arc_check(
-            self,
-            out_file=False,
-            fname="arccheck.txt",
-            dl=None,
-            input_size=(200, 3, 256, 256),
-            verbose=1,
-            col_names=["input_size", "output_size", "kernel_size", "num_params", "mult_adds", ],
-            row_settings=["var_names"],
-            ):
-        if dl is not None:
-            inputs, _ = next(iter(dl))
-            input_size = inputs.shape
-        try:
-            tmp_out = io.StringIO()
-            sys.stdout = tmp_out
-            summary(
-                    model=self.network,
-                    input_size=input_size,
-                    verbose=verbose,
-                    col_names=col_names,
-                    row_settings=row_settings,
-                    )
-        finally:
-            sys.stdout = sys.__stdout__
-        summary_str = tmp_out.getvalue()
-
-        if out_file:
-            with open(fname, "w") as f:
-                f.write(summary_str)
-
-        return summary_str
-
-    def repr_network(self):
-        return repr(self.network)
-
-    def repr_loss_func(self):
-        return repr(self.loss_func)
+    def repr_criterion(self):
+        return repr(self.criterion)
 
     def repr_optimizer(self, use_break=False):
         string = repr(self.optimizer)
@@ -310,7 +377,7 @@ class Trainer(TrainerUtils):
         return string
 
     def repr_scheduler(self, use_break=False):
-        if self.scheduler_t is None:
+        if self.scheduler_t == (None, None):
             return None
         else:
             format_string = self.scheduler_t[0].__class__.__name__ + " (\n"
@@ -333,7 +400,7 @@ class Trainer(TrainerUtils):
 
 class MultiTrainer(TrainerUtils):
     def __init__(self, trainers=None, device=None):
-        super().__init__(device)
+        super().__init__(device) # アンサンブルとか，params数を合算したいとかならmerge=Trueとする
         self.trainers = trainers
 
     def train_1epoch(self, dl):
@@ -392,26 +459,27 @@ class MultiTrainer(TrainerUtils):
 
         return val_losses, val_accs
 
+    @property
+    def networks(self):
+        return Networks([trainer.network for trainer in self.trainers], merge=False)
+
     def __getattr__(self, attr):
         def wrapper(*args, **kwargs):
             return_l = []
             for i, trainer in enumerate(self.trainers):
                 new_args = [arg[i] if isinstance(arg, list) and len(arg) == len(self.trainers) else arg for arg in args]
-                new_kwargs = {k: v[i] if isinstance(v, list) and len(v) == len(self.runs) else v for k, v in kwargs.items()}
+                new_kwargs = {k: v[i] if isinstance(v, list) and len(v) == len(self.trainers) else v for k, v in kwargs.items()}
                 return_l.append(getattr(trainer, attr)(*new_args, **new_kwargs))
             return return_l
         return wrapper
 
 
-class MergeEnsemble(TrainerUtils):
-    def __init__(self, trainers=None, device=None):
-        super().__init__(device)
-        self.trainers = trainers
-        self.loss_func = trainers[0].loss_func
-        # self.optimizer = trainers[0].optimizer.__class__([p for trainer in trainers for p in trainer.network.parameters()], **trainers[0].optimizer.defaults)
+class MergeEnsemble(Trainer):
+    def __init__(self, networks, criterion=None, optimizer=None, scheduler_t=(None, None), device=None):
+        super().__init__(None, criterion, optimizer, scheduler_t, device)
+        self.trainers = [Trainer(network, device=device) for network in networks]
 
-
-    def train_1epoch(self, dl, ens_f=lambda outputs_t: torch.stack(outputs_t, dim=0).mean(dim=0), incl_members=False):
+    def train_1epoch(self, dl, ens_f=lambda outputs_l: torch.stack(outputs_l, dim=0).mean(dim=0), incl_members=False):
         total_losses = [0.0] * len(self.trainers)
         total_corrs = [0] * len(self.trainers)
 
@@ -434,28 +502,21 @@ class MergeEnsemble(TrainerUtils):
                 outputs_l.append(outputs)
 
             ens_outputs = ens_f(outputs_l)  # デフォルトでは平均をとる
-            ens_loss = self.loss_func(ens_outputs, labels)
+            ens_loss = self.criterion(ens_outputs, labels)
             self.update_grad(ens_loss)
             ens_preds, ens_corr = self.eval_flow(ens_outputs, labels)
 
             ens_total_loss += ens_loss.item() * len(inputs)
             ens_total_corr += ens_corr
 
-            # for trainer in self.trainers:
-            #     if trainer.scheduler_t[1] == "iter":
-            #         trainer.scheduler_t[0].step()
-
-        # for trainer in self.trainers:
-            # if trainer.scheduler_t[1] == "epoch":
-            #     trainer.scheduler_t[0].step()
             if self.scheduler_t[1] == "iter":
                 self.scheduler_t[0].step()
 
         if self.scheduler_t[1] == "epoch":
             self.scheduler_t[0].step()
 
-        train_losses = [ens_total_loss / len(dl.dataset) for ens_total_loss in total_losses]
-        train_accs = [ens_total_corr / len(dl.dataset) for ens_total_corr in total_corrs]
+        train_losses = [total_loss / len(dl.dataset) for total_loss in total_losses]
+        train_accs = [total_corr / len(dl.dataset) for total_corr in total_corrs]
 
         ens_train_loss = ens_total_loss / len(dl.dataset)
         ens_train_acc = ens_total_corr / len(dl.dataset)
@@ -465,7 +526,7 @@ class MergeEnsemble(TrainerUtils):
         else:
             return ens_train_loss, ens_train_acc
 
-    def val_1epoch(self, dl, ens_f=lambda outputs_t: torch.stack(outputs_t, dim=0).mean(dim=0), incl_members=False):
+    def val_1epoch(self, dl, ens_f=lambda outputs_l: torch.stack(outputs_l, dim=0).mean(dim=0), incl_members=False):
         if dl is None:
             return None, None
 
@@ -492,14 +553,14 @@ class MergeEnsemble(TrainerUtils):
                     outputs_l.append(outputs)
 
                 ens_outputs = ens_f(outputs_l)  # デフォルトでは平均をとる
-                ens_loss = self.loss_func(ens_outputs, labels)
+                ens_loss = self.criterion(ens_outputs, labels)
                 ens_preds, ens_corr = self.eval_flow(ens_outputs, labels)
 
                 ens_total_loss += ens_loss.item() * len(inputs)
                 ens_total_corr += ens_corr
 
-        val_losses = [ens_total_loss / len(dl.dataset) for ens_total_loss in total_losses]
-        val_accs = [ens_total_corr / len(dl.dataset) for ens_total_corr in total_corrs]
+        val_losses = [total_loss / len(dl.dataset) for total_loss in total_losses]
+        val_accs = [total_loss / len(dl.dataset) for total_loss in total_corrs]
 
         ens_val_loss = ens_total_loss / len(dl.dataset)
         ens_val_acc = ens_total_corr / len(dl.dataset)
@@ -509,66 +570,20 @@ class MergeEnsemble(TrainerUtils):
         else:
             return ens_val_loss, ens_val_acc
 
-    def update_grad(self, loss):
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-        # [trainer.optimizer.zero_grad() for trainer in self.trainers]
-        # loss.backward()
-        # [trainer.optimizer.step() for trainer in self.trainers]
+    @property
+    def networks(self):
+        return Networks([trainer.network for trainer in self.trainers], merge=True, merge_f=lambda networks: sum(networks))
 
-    def eval_flow(self, outputs, labels):
-        preds = torch.argmax(outputs.detach(), dim=1)
-        corr = torch.sum(preds == labels.data).item()
+    # def __getattr__(self, attr):
+    #     def wrapper(*args, **kwargs):
+    #         return_l = []
+    #         for i, trainer in enumerate(self.trainers):
+    #             new_args = [arg[i] if isinstance(arg, list) and len(arg) == len(self.trainers) else arg for arg in args]
+    #             new_kwargs = {k: v[i] if isinstance(v, list) and len(v) == len(self.runs) else v for k, v in kwargs.items()}
+    #             return_l.append(getattr(trainer, attr)(*new_args, **new_kwargs))
+    #         return return_l
+    #     return wrapper
 
-        return preds, corr
 
-    def repr_optimizer(self, use_break=False):
-        string = repr(self.optimizer)
-        if not use_break:
-            string = string.replace("\n", " ")
-        return string
 
-    def repr_scheduler(self, use_break=False):
-        if self.scheduler_t is None:
-            return None
-        else:
-            format_string = self.scheduler_t[0].__class__.__name__ + " (\n"
-            for attr in dir(self.scheduler_t[0]):
-                if not attr.startswith("_") and not callable(getattr(self.scheduler_t[0], attr)):  # exclude special attributes and methods
-                    if attr.startswith("optimizer"):
-                        value = f"{getattr(self.scheduler_t[0], attr).__class__.__name__}()"
-                    else:
-                        value = getattr(self.scheduler_t[0], attr)
-                    format_string += f"{attr} = {value}\n"
-            format_string += ")"
-
-            if not use_break:
-                format_string = format_string.replace("\n", " ")
-            return format_string
-
-    def repr_loss_func(self):
-        return repr(self.loss_func)
-
-    def count_params(self):
-        return sum(trainer.count_params() for trainer in self.trainers)
-
-    def count_trainable_params(self):
-        return sum(trainer.count_trainable_params() for trainer in self.trainers)
-
-    def count_params_with_grad(self):
-        return sum(trainer.count_params_with_grad() for trainer in self.trainers)
-    
-    def grad_mean(self, abs=True):
-        return sum(trainer.grad_mean(abs) for trainer in self.trainers) / len(self.trainers)
-
-    def __getattr__(self, attr):
-        def wrapper(*args, **kwargs):
-            return_l = []
-            for i, trainer in enumerate(self.trainers):
-                new_args = [arg[i] if isinstance(arg, list) and len(arg) == len(self.trainers) else arg for arg in args]
-                new_kwargs = {k: v[i] if isinstance(v, list) and len(v) == len(self.runs) else v for k, v in kwargs.items()}
-                return_l.append(getattr(trainer, attr)(*new_args, **new_kwargs))
-            return return_l
-        return wrapper
 

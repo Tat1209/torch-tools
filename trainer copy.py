@@ -196,71 +196,80 @@ class TrainerUtils:
 
 
 class Trainer(TrainerUtils):
-    def __init__(self, network=None, criterion=None, optimizer=None, scheduler_t=(None, None), device=None):
+    def __init__(self, network, criterion, optimizer, scheduler=None, device=None):
         super().__init__(device)
-        if network is not None:
-            self.network = network.to(self.device)
+        self.network = network.to(self.device)
         self.criterion = criterion
         self.optimizer = optimizer
-        if scheduler_t != (None, None):
-            assert isinstance(scheduler_t, tuple), "scheduler_t must be a tuple"
-            assert len(scheduler_t) == 2, "scheduler_t must have two elements"
-            assert isinstance(scheduler_t[0], torch.optim.lr_scheduler.LRScheduler), "scheduler_t[0] must be a torch.optim.lr_scheduler type"
-            assert isinstance(scheduler_t[1], str), "scheduler_t[1] must be a string"
-            assert scheduler_t[1] in ["epoch", "iter"], "scheduler_t[1] must be either 'epoch' or 'iter'"
-        self.scheduler_t = scheduler_t
-
+        self.scheduler = scheduler
+        
     # @TrainerUtils.time_log("train_dur", mode="add")
     # @TrainerUtils.time_log("total_dur", mode="add")
+    def init_stats(self, mode: str):
+        match mode:
+            case "train":
+                self.stats = {"total_loss": 0.0, "total_corr": 0, "train_loss": None, "train_acc": None}
+            case "val":
+                self.stats = {"total_loss": 0.0, "total_corr": 0, "val_loss": None, "val_acc": None}
+            case _:
+                raise ValueError(f"Unknown mode: {mode}")
+        
+    def fetch_stats(self, mode: str):
+        match mode:
+            case "train":
+                return self.stats["train_loss"], self.stats["train_acc"]
+            case "val":
+                return self.stats["val_loss"], self.stats["val_acc"]
+            case _:
+                raise ValueError(f"Unknown mode: {mode}")
+        
     def train_1epoch(self, dl):
-        total_loss = 0.0
-        total_corr = 0
-
+        self.init_stats(mode="train")
         self.network.train()
+
         for inputs, labels in dl:
             inputs, labels = inputs.to(self.device), labels.to(self.device)
-            outputs, loss = self.model_flow(inputs, labels)
-            preds, corr = self.eval_flow(outputs, labels)
+            self.train_1batch(inputs, labels)
 
-            total_loss += loss.item() * len(inputs)
-            total_corr += corr
+        if self.scheduler is not None:
+            self.scheduler.step()
 
-            self.update_grad(loss)
+        self.stats["train_loss"] = self.stats["total_loss"] / len(dl.dataset)
+        self.stats["train_acc"] = self.stats["total_corr"] / len(dl.dataset)
 
-            if self.scheduler_t[1] == "iter":
-                self.scheduler_t[0].step()
-        if self.scheduler_t[1] == "epoch":
-            self.scheduler_t[0].step()
+        return self.fetch_stats(mode="train")
+    
+    def train_1batch(self, inputs, labels):
+        outputs, loss = self.forward_flow(inputs, labels)
+        preds, corr = self.eval_flow(outputs, labels)
 
-        train_loss = total_loss / len(dl.dataset)
-        train_acc = total_corr / len(dl.dataset)
+        self.stats["total_loss"] += loss.item() * len(inputs)
+        self.stats["total_corr"] += corr
 
-        return train_loss, train_acc
+        self.update_grad(loss)
 
     # @TrainerUtils.time_log("total_dur", mode="add")
     def val_1epoch(self, dl):
+        self.init_stats(mode="val")
         if dl is None:
-            return None, None
-
+            return self.fetch_stats(mode="val")
         self.network.eval()
-        total_loss = 0.0
-        total_corr = 0
 
         with torch.no_grad():
             for inputs, labels in dl:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
-                outputs, loss = self.model_flow(inputs, labels)
+                outputs, loss = self.forward_flow(inputs, labels)
                 preds, corr = self.eval_flow(outputs, labels)
 
-                total_loss += loss.item() * len(inputs)
-                total_corr += corr
+                self.stats["total_loss"] += loss.item() * len(inputs)
+                self.stats["total_corr"] += corr
 
-        val_loss = total_loss / len(dl.dataset)
-        val_acc = total_corr / len(dl.dataset)
+        self.stats["val_loss"] = self.stats["total_loss"] / len(dl.dataset)
+        self.stats["val_acc"] = self.stats["total_corr"] / len(dl.dataset)
 
-        return val_loss, val_acc
+        return self.fetch_stats(mode="val")
 
-    def model_flow(self, inputs, labels):
+    def forward_flow(self, inputs, labels):
         outputs = self.network(inputs)
         loss = self.criterion(outputs, labels)
 
@@ -316,11 +325,9 @@ class Trainer(TrainerUtils):
         return time_info
 
     def get_lr(self):
-        # return self.scheduler_t[0].get_lr()[0]
-        if self.scheduler_t == (None, None):
+        if self.scheduler:
             return self.optimizer.param_groups[0]["lr"]
-        return self.scheduler_t[0].get_last_lr()[0] # recommended
-    # return self.optimizer.param_groups[0]["lr"]
+        return self.scheduler.get_last_lr()[0] # recommended
 
     def repr_criterion(self):
         return repr(self.criterion)
@@ -332,22 +339,22 @@ class Trainer(TrainerUtils):
         return string
 
     def repr_scheduler(self, use_break=False):
-        if self.scheduler_t == (None, None):
-            return None
-        else:
-            format_string = self.scheduler_t[0].__class__.__name__ + " (\n"
-            for attr in dir(self.scheduler_t[0]):
-                if not attr.startswith("_") and not callable(getattr(self.scheduler_t[0], attr)):  # exclude special attributes and methods
+        if self.scheduler:
+            format_string = self.scheduler.__class__.__name__ + " (\n"
+            for attr in dir(self.scheduler):
+                if not attr.startswith("_") and not callable(getattr(self.scheduler, attr)):  # exclude special attributes and methods
                     if attr.startswith("optimizer"):
-                        value = f"{getattr(self.scheduler_t[0], attr).__class__.__name__}()"
+                        value = f"{getattr(self.scheduler, attr).__class__.__name__}()"
                     else:
-                        value = getattr(self.scheduler_t[0], attr)
+                        value = getattr(self.scheduler, attr)
                     format_string += f"{attr} = {value}\n"
             format_string += ")"
 
             if not use_break:
                 format_string = format_string.replace("\n", " ")
             return format_string
+        else:
+            return None
 
     def repr_device(self):
         return repr(self.device)
@@ -359,16 +366,15 @@ class MultiTrainer(TrainerUtils):
         self.trainers = trainers
 
     def train_1epoch(self, dl):
-        total_losses = [0.0] * len(self.trainers)
-        total_corrs = [0] * len(self.trainers)
-
-        [trainer.network.train() for trainer in self.trainers]
+        for trainer in self.trainers:
+            trainer.init_stats(mode="train")
+            trainer.network.train()
         
         for inputs, labels in dl:
             inputs, labels = inputs.to(self.device), labels.to(self.device)
 
             for i, trainer in enumerate(self.trainers):
-                outputs, loss = trainer.model_flow(inputs, labels)
+                outputs, loss = trainer.forward_flow(inputs, labels)
                 preds, corr = trainer.eval_flow(outputs, labels)
 
                 total_losses[i] += loss.item() * len(inputs)
@@ -377,12 +383,12 @@ class MultiTrainer(TrainerUtils):
                 trainer.update_grad(loss)
 
             for trainer in self.trainers:
-                if trainer.scheduler_t[1] == "iter":
-                    trainer.scheduler_t[0].step()
+                if trainer.scheduler[1] == "iter":
+                    trainer.scheduler[0].step()
 
         for trainer in self.trainers:
-            if trainer.scheduler_t[1] == "epoch":
-                trainer.scheduler_t[0].step()
+            if trainer.scheduler[1] == "epoch":
+                trainer.scheduler[0].step()
 
         train_losses = [total_loss / len(dl.dataset) for total_loss in total_losses]
         train_accs = [total_corr / len(dl.dataset) for total_corr in total_corrs]
@@ -403,7 +409,7 @@ class MultiTrainer(TrainerUtils):
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
 
                 for i, trainer in enumerate(self.trainers):
-                    outputs, loss = trainer.model_flow(inputs, labels)
+                    outputs, loss = trainer.forward_flow(inputs, labels)
                     preds, corr = trainer.eval_flow(outputs, labels)
 
                     total_losses[i] += loss.item() * len(inputs)
@@ -430,8 +436,8 @@ class MultiTrainer(TrainerUtils):
 
 
 class MergeEnsemble(Trainer):
-    def __init__(self, networks, criterion=None, optimizer=None, scheduler_t=(None, None), device=None):
-        super().__init__(None, criterion, optimizer, scheduler_t, device)
+    def __init__(self, networks, criterion=None, optimizer=None, scheduler=(None, None), device=None):
+        super().__init__(None, criterion, optimizer, scheduler, device)
         self.trainers = [Trainer(network, criterion, device=device) for network in networks]
             
     def train_1epoch(self, dl, ens_f=lambda outputs_l: torch.stack(outputs_l, dim=0).mean(dim=0), incl_members=False):
@@ -448,7 +454,7 @@ class MergeEnsemble(Trainer):
 
             outputs_l = []
             for i, trainer in enumerate(self.trainers):
-                outputs, loss = trainer.model_flow(inputs, labels)
+                outputs, loss = trainer.forward_flow(inputs, labels)
                 preds, corr = trainer.eval_flow(outputs, labels)
 
                 total_losses[i] += loss.item() * len(inputs)
@@ -464,11 +470,11 @@ class MergeEnsemble(Trainer):
             ens_total_loss += ens_loss.item() * len(inputs)
             ens_total_corr += ens_corr
 
-            if self.scheduler_t[1] == "iter":
-                self.scheduler_t[0].step()
+            if self.scheduler[1] == "iter":
+                self.scheduler[0].step()
 
-        if self.scheduler_t[1] == "epoch":
-            self.scheduler_t[0].step()
+        if self.scheduler[1] == "epoch":
+            self.scheduler[0].step()
 
         train_losses = [total_loss / len(dl.dataset) for total_loss in total_losses]
         train_accs = [total_corr / len(dl.dataset) for total_corr in total_corrs]
@@ -499,7 +505,7 @@ class MergeEnsemble(Trainer):
 
                 outputs_l = []
                 for i, trainer in enumerate(self.trainers):
-                    outputs, loss = trainer.model_flow(inputs, labels)
+                    outputs, loss = trainer.forward_flow(inputs, labels)
                     preds, corr = trainer.eval_flow(outputs, labels)
 
                     total_losses[i] += loss.item() * len(inputs)
@@ -531,12 +537,12 @@ class MergeEnsemble(Trainer):
 
 
 class MergeEnsembleMeta(Trainer):
-    def __init__(self, networks, criterion=None, optimizer=None, scheduler_t=(None, None), device=None):
-        super().__init__(None, criterion, optimizer, scheduler_t, device)
+    def __init__(self, networks, criterion=None, optimizer=None, scheduler=(None, None), device=None):
+        super().__init__(None, criterion, optimizer, scheduler, device)
         self.networks = networks
         self.trainers = [Trainer(network, criterion, device=device) for network in networks]
         self.criterion = nn.CrossEntropyLoss()
-        # self.scheduler_t = (torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=0, last_epoch=-1), "epoch")
+        # self.scheduler = (torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=0, last_epoch=-1), "epoch")
         
         # params, self.meta_model = self.fetch_meta_model()
         # params, buffers = stack_module_state(self.networks)
@@ -610,11 +616,11 @@ class MergeEnsembleMeta(Trainer):
             # ens_total_corr += ens_corr
 
 
-            if self.scheduler_t[1] == "iter":
-                self.scheduler_t[0].step()
+            if self.scheduler[1] == "iter":
+                self.scheduler[0].step()
 
-        if self.scheduler_t[1] == "epoch":
-            self.scheduler_t[0].step()
+        if self.scheduler[1] == "epoch":
+            self.scheduler[0].step()
 
         train_losses = [total_loss / len(dl.dataset) for total_loss in total_losses]
         train_accs = [total_corr / len(dl.dataset) for total_corr in total_corrs]

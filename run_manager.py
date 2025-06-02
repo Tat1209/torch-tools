@@ -85,9 +85,6 @@ class RunManager(PathManager):
     def log_torch_save(self, object, fname):
         torch.save(object, self.fpath(fname))
         
-    def func_cast(self, func, *args, **kwargs):
-        return func(*args, **kwargs)
-
     def log_param(self, name, value):
         self.log_params({name: value})
 

@@ -1,14 +1,17 @@
-from pathlib import Path
 import pickle
-from PIL import Image
+from pathlib import Path
 
 import numpy as np
 import torch
 import torchvision
+from PIL import Image
+# from torchvision import transforms
 from torch.utils.data import Dataset
 from torchvision.datasets.vision import VisionDataset
+from torchvision.transforms import v2 as transforms
 
 from dataset_handler import DatasetHandler
+
 
 class FixRandomDataset(Dataset):
     def __init__(self, size):
@@ -109,7 +112,7 @@ class TinyImageNet(VisionDataset):
             target = self.target_transform(target)
         return data, target
 
-class Datasets:
+class DatasetFetcher:
     def __init__(self, root=None):
         self.root = Path(root)
 
@@ -130,6 +133,7 @@ class Datasets:
             case "stl10_train":
                 return torchvision.datasets.STL10(root=self.root, split="train", download=download)
             case "stl10_val":
+
                 return torchvision.datasets.STL10(root=self.root, split="test", download=download)
             case "caltech101_trainval":
                 return torchvision.datasets.Caltech101(root=self.root, target_type="category", download=download)
@@ -171,15 +175,22 @@ class Datasets:
             try:
                 base_ds = self._base_ds(ds_str, download=True)
             except (RuntimeError, FileNotFoundError) as e:
-                raise e(f"The 'download' argument is not supported for this dataset.")
+                raise e("The 'download' argument is not supported for this dataset.")
         base_ds.ds_str = ds_str
         base_ds.ds_name = base_ds.__class__.__name__
         base_ds.u_seed = u_seed
 
         indices = np.arange(len(base_ds), dtype=np.int32)
         classes = None
-        transform = torchvision.transforms.Compose(transform_l)
-        target_transform = torchvision.transforms.Compose(target_transform_l)
+
+        if transform_l:
+            transform = transforms.Compose(transform_l)
+        else: 
+            transform = None
+        if target_transform_l:
+            target_transform = transforms.Compose(target_transform_l)
+        else:
+            target_transform = None
         
         dsh = DatasetHandler(base_ds, indices, classes, transform, target_transform)
         base_ds.base_dsh = dsh

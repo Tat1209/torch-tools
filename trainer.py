@@ -1,15 +1,18 @@
-import sys
 import copy
+import functools
 import io
+import sys
 from time import time
 
-import torch.nn as nn
 import torch
-import torch.nn.functional as F
+import torch.nn as nn
+from torch.func import functional_call, grad, grad_and_value, stack_module_state, vmap
 from torchinfo import summary
-from torch.func import vmap, grad, stack_module_state, functional_call, grad_and_value
 
 import utils
+from utils import TimeLog
+
+
 
 class Network(nn.Module):
     def __init__(self, base_model):
@@ -97,7 +100,6 @@ class TrainerUtils:
         else:
             self.device = device
 
-        self.time_data = {}
         self.created_time = time()
 
     def printmet(self, met_dict, e=None, epochs=None, itv: int | float =1, force_print=False):
@@ -165,36 +167,19 @@ class TrainerUtils:
         else:
             print(disp_str, end="\r")
 
-    @classmethod
-    def time_log(cls, name="time", mode="add"):
-        assert mode in ("add", "set"), f"Invalid mode: {mode}. Expected 'add' or 'set'."
-
-        def _deco(func):
-            def _wrapper(*args, **kwargs):
-                self = args[0]  # インスタンス（self）を取得
-                if not hasattr(self, "time_data"):
-                    raise AttributeError("Instance must have 'time_data' attribute.")
-                if mode == "add":
-                    start = time()
-                    result = func(*args, **kwargs)
-                    elapsed = time() - start
-                    self.time_data[name] = self.time_data.get(name, 0) + elapsed
-                elif mode == "set":
-                    result = func(*args, **kwargs)
-                    self.time_data[name] = time()
-                return result
-            return _wrapper
-        return _deco
-
-    def timeinfo(self, style=0):
+    def time_info(self, style_time=1, style_dur=0, incl_fmt=True):
         current_time = time()
-        current_time_fmt = utils.format_time(current_time, style=1)
         duration = current_time - self.created_time
-        duration_fmt = utils.format_duration(duration)
 
-        return {"timestamp": current_time, "timestamp_fmt": current_time_fmt, "duration": duration, "duration_fmt": duration_fmt}
+        if incl_fmt:
+            current_time_fmt = utils.format_time(current_time, style=style_time)
+            duration_fmt = utils.format_duration(duration, style=style_dur)
+            return {"timestamp": current_time, "timestamp_fmt": current_time_fmt, "duration": duration, "duration_fmt": duration_fmt}
+        else:
+            return {"timestamp": current_time, "duration": duration}
+    
 
-
+@TimeLog()
 class Trainer(TrainerUtils):
     def __init__(self, network, criterion, optimizer, scheduler=None, device=None):
         super().__init__(device)
@@ -203,50 +188,92 @@ class Trainer(TrainerUtils):
         self.optimizer = optimizer
         self.scheduler = scheduler
         
+    @TimeLog("dur_train", mode="add")
+    @TimeLog("dur_total", mode="add")
     def train_1epoch(self, dl):
-        total_loss = 0.0
-        total_corr = 0
-
+        stats_l = []
         self.network.train()
         for inputs, labels in dl:
             inputs, labels = inputs.to(self.device), labels.to(self.device)
-            outputs, loss = self.forward_flow(inputs, labels)
-            preds, corr = self.eval_flow(outputs, labels)
-
-            total_loss += loss.item() * len(inputs)
-            total_corr += corr
-
-            self.update_grad(loss)
+            stats = self.train_1batch(inputs, labels)
+            stats_l.append(stats)
 
         if self.scheduler is not None:
             self.scheduler.step()
 
-        train_loss = total_loss / len(dl.dataset)
-        train_acc = total_corr / len(dl.dataset)
-
-        return train_loss, train_acc
+        return self.agg_epoch(stats_l)
     
+    # @TimeLog("dur_val", mode="add")
+    # @TimeLog("dur_total", mode="add")
     def val_1epoch(self, dl):
         if dl is None:
-            return None, None
+            return None
 
+        stats_l = []
         self.network.eval()
-        total_loss = 0.0
-        total_corr = 0
-
         with torch.no_grad():
             for inputs, labels in dl:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
-                outputs, loss = self.forward_flow(inputs, labels)
-                preds, corr = self.eval_flow(outputs, labels)
+                stats = self.val_1batch(inputs, labels)
+                stats_l.append(stats)
 
-                total_loss += loss.item() * len(inputs)
-                total_corr += corr
+        return self.agg_epoch(stats_l)
+    
+    def agg_epoch(self, stats_l, mode=None):
+        total_loss = sum(stats["batch_loss"] for stats in stats_l)
+        total_corr = sum(stats["batch_corr"] for stats in stats_l)
+        total_ndata = sum(stats["batch_ndata"] for stats in stats_l)
+        
+        loss = total_loss / total_ndata
+        acc = total_corr / total_ndata
+        
+        return loss, acc
+    
+    @TimeLog("dur_train_core", mode="add")
+    @TimeLog("dur_total_core", mode="add")
+    def train_1batch(self, inputs, labels):
+        outputs, loss = self.forward_flow(inputs, labels)
+        preds, corr = self.eval_flow(outputs, labels)
+        self.update_grad(loss)
 
-        val_loss = total_loss / len(dl.dataset)
-        val_acc = total_corr / len(dl.dataset)
+        stats = {"batch_loss": loss.item() * len(inputs), "batch_corr": corr, "batch_ndata": len(inputs)}
+        return stats.copy()
 
-        return val_loss, val_acc
+    # @TimeLog("dur_val_core", mode="add")
+    @TimeLog("dur_total_core", mode="add")
+    def val_1batch(self, inputs, labels):
+        outputs, loss = self.forward_flow(inputs, labels)
+        preds, corr = self.eval_flow(outputs, labels)
+
+        stats = {"batch_loss": loss.item() * len(inputs), "batch_corr": corr, "batch_ndata": len(inputs)}
+        return stats.copy()
+
+    @TimeLog("dur_pred", mode="add")
+    def pred_1iter(self, dl, categorize=True, prob=False):
+        all_outputs = []
+        all_labels = []
+
+        self.network.eval()
+        with torch.no_grad():
+            for inputs, labels in dl:
+                inputs = inputs.to(self.device)
+                if isinstance(labels, torch.Tensor):
+                    labels = labels.to(self.device)
+
+                outputs = self.network(inputs)
+                
+                if prob:
+                    outputs = torch.softmax(outputs, dim=1)
+                elif categorize:
+                    outputs = torch.argmax(outputs, dim=1)
+
+                all_outputs.append(outputs)
+                all_labels.append(labels)
+
+        all_outputs = torch.cat(all_outputs, dim=0)
+        all_labels = torch.cat(all_labels, dim=0)
+
+        return all_outputs, all_labels
 
     def forward_flow(self, inputs, labels):
         outputs = self.network(inputs)
@@ -261,147 +288,98 @@ class Trainer(TrainerUtils):
         return preds, corr
 
     def update_grad(self, loss):
-        # 通常は zero_grad -> bachward -> step
-        # 効率を考慮するなら backward -> step -> zero_grad
+        # 通常は zero_grad -> bachward -> step  効率を考慮するなら backward -> step -> zero_grad
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
-    # @TrainerUtils.time_log("pred_dur", mode="add")
-    def pred_1iter(self, dl, categorize=True):
-        total_outputs = []
-        total_labels = []
-
-        self.network.eval()
-        with torch.no_grad():
-            for inputs, labels in dl:
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device)
-
-                outputs = self.network(inputs).detach()
-
-                if categorize:
-                    outputs = torch.argmax(outputs, dim=1)
-
-                total_outputs.append(outputs)
-                total_labels.append(labels)
-
-        outputs = torch.cat(total_outputs, dim=0)
-        labels = torch.cat(total_labels, dim=0)
-
-        return outputs, labels
-
-    def timeinfo(self):
-        time_info = super().timeinfo()
-        # for k, v in self.time_data.items():
-        #     time_info[k] = v
-        #     k_fmt = k + "_fmt"
-        #     if k.endswith("_dur"):
-        #         time_info[k_fmt] = utils.format_duration(v, style=0)
-        #     elif k.endswith("_time"):
-        #         time_info[k_fmt] = utils.format_time(v, style=1)
-
-        return time_info
-
     def get_lr(self):
         if self.scheduler:
-            return self.optimizer.param_groups[0]["lr"]
-        return self.scheduler.get_last_lr()[0] # recommended
+            return self.scheduler.get_last_lr()[0] # recommended
+        return self.optimizer.param_groups[0]["lr"]
 
-    def repr_criterion(self):
-        return repr(self.criterion)
+    def fmt_criterion(self):
+        return self.criterion.__class__.__name__
 
-    def repr_optimizer(self, use_break=False):
-        string = repr(self.optimizer)
-        if not use_break:
-            string = string.replace("\n", " ")
+    def fmt_optimizer(self, verbose=False, use_break=False):
+        if verbose:
+            string = repr(self.optimizer)
+            if not use_break:
+                lines = string.split("\n")
+                lines = [line.strip() for line in lines if line.strip()]
+                string = " ".join(lines)
+        else:
+            string = self.optimizer.__class__.__name__
         return string
 
-    def repr_scheduler(self, use_break=False):
+    def fmt_scheduler(self, verbose=False, use_break=False):
         if self.scheduler:
-            format_string = self.scheduler.__class__.__name__ + " (\n"
-            for attr in dir(self.scheduler):
-                if not attr.startswith("_") and not callable(getattr(self.scheduler, attr)):  # exclude special attributes and methods
-                    if attr.startswith("optimizer"):
-                        value = f"{getattr(self.scheduler, attr).__class__.__name__}()"
-                    else:
-                        value = getattr(self.scheduler, attr)
-                    format_string += f"{attr} = {value}\n"
-            format_string += ")"
+            if verbose:
+                string = self.scheduler.__class__.__name__ + "(\n"
+                for attr in dir(self.scheduler):
+                    if not attr.startswith("_") and not callable(getattr(self.scheduler, attr)):  # exclude special attributes and methods
+                        if attr.startswith("optimizer"):
+                            value = f"{getattr(self.scheduler, attr).__class__.__name__}()"
+                        else:
+                            value = getattr(self.scheduler, attr)
+                        string += f"{attr} = {value}\n"
+                string += ")"
+            else:
+                string = self.scheduler.__class__.__name__
 
             if not use_break:
-                format_string = format_string.replace("\n", " ")
-            return format_string
+                lines = string.split("\n")
+                lines = [line.strip() for line in lines if line.strip()]
+                string = " ".join(lines)
+            return string
         else:
             return None
 
-    def repr_device(self):
-        return repr(self.device)
 
-
+@TimeLog(stats_name="time_stats_mt")
 class MultiTrainer(TrainerUtils):
-    def __init__(self, trainers=None, device=None):
+    def __init__(self, trainers, device=None):
         super().__init__(device)
         self.trainers = trainers
 
-    def train_1epoch(self, dl):
-        for trainer in self.trainers:
-            trainer.init_stats(mode="train")
-            trainer.network.train()
+    def train_1epoch(self, dl, agg_f=lambda agg_l: map(list, zip(*agg_l))):
+        [trainer.network.train() for trainer in self.trainers]
         
-        for inputs, labels in dl:
+        stats_ll = [[] for _ in self.trainers]
+        for inputs, labels in TimeLog.iter_load(self, "dur_dl_train", dl):
+        # for inputs, labels in dl:
             inputs, labels = inputs.to(self.device), labels.to(self.device)
-
             for i, trainer in enumerate(self.trainers):
-                outputs, loss = trainer.forward_flow(inputs, labels)
-                preds, corr = trainer.eval_flow(outputs, labels)
+                stats = trainer.train_1batch(inputs, labels)
+                stats_ll[i].append(stats)
+        agg_l = [trainer.agg_epoch(stats_l) for trainer, stats_l in zip(self.trainers, stats_ll)]
+        if agg_f:
+            agg_l = agg_f(agg_l)                
 
-                total_losses[i] += loss.item() * len(inputs)
-                total_corrs[i] += corr
+        return agg_l
 
-                trainer.update_grad(loss)
-
-            for trainer in self.trainers:
-                if trainer.scheduler[1] == "iter":
-                    trainer.scheduler[0].step()
-
-        for trainer in self.trainers:
-            if trainer.scheduler[1] == "epoch":
-                trainer.scheduler[0].step()
-
-        train_losses = [total_loss / len(dl.dataset) for total_loss in total_losses]
-        train_accs = [total_corr / len(dl.dataset) for total_corr in total_corrs]
-
-        return train_losses, train_accs
-
-    def val_1epoch(self, dl):
+    def val_1epoch(self, dl, agg_f=lambda agg_l: map(list, zip(*agg_l))):
         if dl is None:
-            return None, None
-
-        total_losses = [0.0] * len(self.trainers)
-        total_corrs = [0] * len(self.trainers)
+            return None
 
         [trainer.network.eval() for trainer in self.trainers]
 
         with torch.no_grad():
+            stats_ll = [[] for _ in self.trainers]
             for inputs, labels in dl:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
-
                 for i, trainer in enumerate(self.trainers):
-                    outputs, loss = trainer.forward_flow(inputs, labels)
-                    preds, corr = trainer.eval_flow(outputs, labels)
+                    stats = trainer.val_1batch(inputs, labels)
+                    stats_ll[i].append(stats)
+            agg_l = [trainer.agg_epoch(stats_l) for trainer, stats_l in zip(self.trainers, stats_ll)]
+        if agg_f:
+            agg_l = agg_f(agg_l)                
 
-                    total_losses[i] += loss.item() * len(inputs)
-                    total_corrs[i] += corr
-
-        val_losses = [total_loss / len(dl.dataset) for total_loss in total_losses]
-        val_accs = [total_corr / len(dl.dataset) for total_corr in total_corrs]
-
-        return val_losses, val_accs
+        return agg_l     
 
     @property
     def networks(self):
-        return Networks([trainer.network for trainer in self.trainers], merge_stat=False)
+        return Networks([trainer.network for trainer in self.trainers])
 
     def __getattr__(self, attr):
         def wrapper(*args, **kwargs):
@@ -635,6 +613,8 @@ class MergeEnsembleMeta(Trainer):
                 
                 loss = vmap(compute_loss, in_dims=(0, 0))(self.params, self.buffers)
             
+
+
 
                 # outputs_exp = vmap(lambda params, buffers, inputs: functional_call(self.base_model, (params, buffers), inputs), in_dims=(0, 0, None))(self.params, self.buffers, inputs)  # [M, B, C]
 

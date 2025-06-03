@@ -13,7 +13,6 @@ import utils
 from utils import TimeLog
 
 
-
 class Network(nn.Module):
     def __init__(self, base_model):
         super().__init__()

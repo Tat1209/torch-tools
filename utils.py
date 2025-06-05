@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional
 
 import numpy as np
-import torch
 
 
 def interval(step=None, itv=None, last_step=None):
@@ -30,6 +29,7 @@ def get_source(path=None, with_name=False):
         return src_text
 
 def torch_fix_seed(seed=42):
+    import torch
     random.seed(seed) # Python random
     np.random.seed(seed) # Numpy
     torch.manual_seed(seed) # Pytorch

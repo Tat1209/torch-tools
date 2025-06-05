@@ -112,6 +112,25 @@ class TinyImageNet(VisionDataset):
             target = self.target_transform(target)
         return data, target
 
+class TestDataset(Dataset):
+    def __init__(self, path, transform=None, target_transform=None):
+        self.img_paths = sorted([p for p in Path(path).iterdir()])
+        self.transform = transform
+        self.target_transform = target_transform
+
+    def __getitem__(self, index):
+        path = self.img_paths[index]
+        data = Image.open(path).convert('RGB')
+
+        if self.transform:
+            data = self.transform(data)
+        if self.target_transform:
+            path = self.target_transform(path)
+        return data, str(path.name)
+
+    def __len__(self):
+        return len(self.img_paths)
+
 class DatasetFetcher:
     def __init__(self, root=None):
         self.root = Path(root)
@@ -133,7 +152,6 @@ class DatasetFetcher:
             case "stl10_train":
                 return torchvision.datasets.STL10(root=self.root, split="train", download=download)
             case "stl10_val":
-
                 return torchvision.datasets.STL10(root=self.root, split="test", download=download)
             case "caltech101_trainval":
                 return torchvision.datasets.Caltech101(root=self.root, target_type="category", download=download)
@@ -165,6 +183,10 @@ class DatasetFetcher:
                 return PklToDataset(self.root / Path("kanazawa_test_32_60_ver2.pkl"))
             case "fix_rand":
                 return FixRandomDataset((3, 32, 32))
+            case "comp_train":
+                return torchvision.datasets.ImageFolder(root=Path(self.root) / Path("competition_images/train_val"))
+            case "comp_test":
+                return TestDataset(path=Path(self.root) / Path("competition_images/test"))
             case _:
                 raise ValueError(f"Invalid dataset name: {ds_str}")
 

@@ -1,9 +1,5 @@
 from pathlib import Path
-from time import time
-import datetime
-import shutil
 
-import torch
 import polars as pl
 from polars.exceptions import PolarsError
 
@@ -84,6 +80,7 @@ class RunManager(PathManager):
             fh.write(text)
 
     def log_torch_save(self, object, fname):
+        import torch
         torch.save(object, self.fpath(fname))
         
     def log_param(self, name, value):
@@ -181,8 +178,6 @@ class RunManager(PathManager):
                 df = df.with_columns([(pl.lit("last: ") + pl.col(name).list.last().cast(pl.Utf8)).alias(name)])
                 
         return df
-                
-
 
     def fetch_files(self, fname):
         dir_names = list(self.runs_path.iterdir())

@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 
 from torchvision.models import resnet50, ResNet50_Weights
 # from umap import UMAP
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 from trainer import Trainer
 
@@ -558,7 +558,7 @@ class DatasetHandler(Dataset):
         return label_l, label_d
 
     def _make_msd(self):
-        ms_dict = self.base_ds.base_dsh.transform([torchvision.transforms.ToTensor()]).calc_mean_std(base=False)
+        ms_dict = self.base_ds.base_dsh.transform([torchvision.transforms.ToImage(), torchvision.transforms.ToDtype(torch.float32, scale=True)]).calc_mean_std(base=False)
 
         return ms_dict
 

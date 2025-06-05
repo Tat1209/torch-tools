@@ -65,6 +65,22 @@ class Network(nn.Module):
 
         return summary_str
 
+    def tl_setup(self, num_classes, linear_layer="fc"):
+        for param in self.base_model.parameters():
+            param.requires_grad = False
+
+        old_linear = self.base_model.get_submodule(linear_layer)
+        in_feats = old_linear.in_features
+
+        new_linear = nn.Linear(in_feats, num_classes)
+        self.base_model.set_submodule(linear_layer, new_linear)
+        return self
+        
+    def unfreeze(self):
+        for param in self.base_model.parameters():
+            param.requires_grad = True
+        return self
+    
     def repr_network(self, **kwargs):
         return repr(self.base_model)
 

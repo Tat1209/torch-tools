@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 from torchvision.datasets.vision import VisionDataset
 from torchvision.transforms import v2 as transforms
 
-from dataset_handler import DatasetHandler
+from dataset_handler import fetch_handler
 
 
 class FixRandomDataset(Dataset):
@@ -114,6 +114,7 @@ class TinyImageNet(VisionDataset):
 
 class TestDataset(Dataset):
     def __init__(self, path, transform=None, target_transform=None):
+        self.root = Path(path).parent
         self.img_paths = sorted([p for p in Path(path).iterdir()])
         self.transform = transform
         self.target_transform = target_transform
@@ -135,8 +136,8 @@ class DatasetFetcher:
     def __init__(self, root=None):
         self.root = Path(root)
 
-    def _base_ds(self, ds_str, download=False):
-        match (ds_str):
+    def _base_ds(self, dataset_id, download=False):
+        match (dataset_id):
             case "mnist_train":
                 return torchvision.datasets.MNIST(root=self.root, train=True, download=download)
             case "mnist_val":
@@ -175,47 +176,22 @@ class DatasetFetcher:
                 return torchvision.datasets.Flowers102(root=self.root, split="test", download=download)
             case "imagenet":
                 return torchvision.datasets.ImageNet(root=self.root, split="val")
-            case "mnist_ddim":
-                return torchvision.datasets.ImageFolder(root=str(Path(self.root) / Path("mnist_ddim")))
-            case "ai-step_l":
-                return PklToDataset(self.root / Path("fukui_train_32_60_ver2.pkl"))
-            case "ai-step_ul":
-                return PklToDataset(self.root / Path("kanazawa_test_32_60_ver2.pkl"))
-            case "fix_rand":
-                return FixRandomDataset((3, 32, 32))
             case "comp_train":
                 return torchvision.datasets.ImageFolder(root=Path(self.root) / Path("competition_images/train_val"))
             case "comp_test":
                 return TestDataset(path=Path(self.root) / Path("competition_images/test"))
             case _:
-                raise ValueError(f"Invalid dataset name: {ds_str}")
+                raise ValueError(f"Invalid dataset name: {dataset_id}")
 
-    def __call__(self, ds_str, transform_l=[], target_transform_l=[], u_seed=None):
+    def __call__(self, dataset_id):
         try:
-            base_ds = self._base_ds(ds_str)
+            base_ds = self._base_ds(dataset_id)
         except RuntimeError:
             try:
-                base_ds = self._base_ds(ds_str, download=True)
+                base_ds = self._base_ds(dataset_id, download=True)
             except (RuntimeError, FileNotFoundError) as e:
                 raise e("The 'download' argument is not supported for this dataset.")
-        base_ds.ds_str = ds_str
-        base_ds.ds_name = base_ds.__class__.__name__
-        base_ds.u_seed = u_seed
-
-        indices = np.arange(len(base_ds), dtype=np.int32)
-        classes = None
-
-        if transform_l:
-            transform = transforms.Compose(transform_l)
-        else: 
-            transform = None
-        if target_transform_l:
-            target_transform = transforms.Compose(target_transform_l)
-        else:
-            target_transform = None
-        
-        dsh = DatasetHandler(base_ds, indices, classes, transform, target_transform)
-        base_ds.base_dsh = dsh
-        
-        return dsh
-
+            # handler を返す処理を追加
+        base_dsh = fetch_handler(dataset_id, base_ds, root=self.root)
+        return base_dsh
+    

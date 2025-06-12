@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 import polars as pl
@@ -7,15 +8,15 @@ import utils
 
 
 class PathManager:
-    def __init__(self, exc_path=None, exp_name="exp_default", exp_path=None):
+    def __init__(self, exec_path=None, exp_name="exp_default", exp_path=None):
         # exp_pathを指定 -> 格納ディレクトリとexp_nameを同時に指定
-        if exc_path is None:
+        if exec_path is None:
             exp_path = Path(exp_path).resolve()
             pa_path = exp_path.parent
 
-        # exc_path(__file__)とexp_nameを指定 -> コード実行ディレクトリと同じディレクトリに結果を格納
+        # exec_path(__file__)とexp_nameを指定 -> コード実行ディレクトリと同じディレクトリに結果を格納
         else:
-            pa_path = Path(exc_path).resolve().parent  # 常に__file__が送られてくるならresolveは不要
+            pa_path = Path(exec_path).resolve().parent  # 常に__file__が送られてくるならresolveは不要
             exp_path = pa_path / Path(exp_name)
 
         self.pa_path = pa_path
@@ -29,19 +30,35 @@ class PathManager:
     
 
 class RunManager(PathManager):
-    def __init__(self, exc_path=None, exp_name="exp_default", exp_path=None, run_id=None):
+    params_pq = "_params.parquet"
+    metrics_pq = "_metrics.parquet"
+    stats_pq = "_stats.parquet"
+    results_pq = "_results.parquet"
+
+    params_csv = "_params.csv"
+    metrics_csv = "_metrics.csv"
+    stats_csv = "_stats.csv"
+    results_csv = "_results.csv"
+
+    def __init__(self, exec_path=None, exp_name="exp_default", exp_path=None, run_id=None, exp_tpl="exp_tpl"):
         """
         ex.)
-            run = RunManager(exc_path=__file__, exp_name="exp_nyancat")
+            run = RunManager(exec_path=__file__, exp_name="exp_nyancat")
         """
-        super().__init__(exc_path, exp_name, exp_path)
-
-        # 複数同時に作ったときに残らないから却下
-        # if auto_delete  and  exp_name == "exp_tmp":
-        #     if Path(self.exp_path).exists():
-        #         shutil.rmtree(self.exp_path)
+        super().__init__(exec_path, exp_name, exp_path)
         
-        self.exp_path.mkdir(parents=True, exist_ok=True)
+        if not self.exp_path.exists():
+            self.exp_path.mkdir(parents=True, exist_ok=False)
+
+            path_exp_def = Path(__file__).resolve().parent / "exp_tpls" / exp_tpl
+            if path_exp_def.is_dir():
+                for item in path_exp_def.iterdir():
+                    dest = self.exp_path / item.name
+                    if item.is_dir():
+                        shutil.copytree(item, dest, dirs_exist_ok=True)
+                    elif item.is_file():
+                        shutil.copy2(item, dest)
+
         self.runs_path.mkdir(parents=True, exist_ok=True)
 
         if run_id is None:
@@ -57,10 +74,6 @@ class RunManager(PathManager):
         
         self.df_params = None
         self.df_metrics = None
-        
-        self.params_name = "_params.parquet"
-        self.metrics_name = "_metrics.parquet"
-        self.stats_name = "_stats.parquet"
         
     def exe_path(self, func, fname):
         path = self.fpath(fname)
@@ -131,10 +144,10 @@ class RunManager(PathManager):
             )
     
     def _inherit_stats(self):
-        if self.fpath(self.params_name).exists():
-            self.df_params = pl.read_parquet(self.fpath(self.params_name))
-        if self.fpath(self.metrics_name).exists():
-            self.df_metrics = pl.read_parquet(self.fpath(self.metrics_name))
+        if self.fpath(self.params_pq).exists():
+            self.df_params = pl.read_parquet(self.fpath(self.params_pq))
+        if self.fpath(self.metrics_pq).exists():
+            self.df_metrics = pl.read_parquet(self.fpath(self.metrics_pq))
 
     def _fetch_stats(self):
             if self.df_params is not None and self.df_metrics is not None:
@@ -152,29 +165,24 @@ class RunManager(PathManager):
     def ref_stats(self, step=None, itv=None, last_step=None):
         if utils.interval(step=step, itv=itv, last_step=last_step):
             if self.df_params is not None:
-                self.df_params.write_parquet(self.fpath(self.params_name))
+                self.df_params.write_parquet(self.fpath(self.params_pq))
                 df_nonest = self._resolve_nested(self.df_params)
-                df_nonest.write_csv(self.fpath("_params.csv"))
+                df_nonest.write_csv(self.fpath(self.params_csv))
             if self.df_metrics is not None:
-                self.df_metrics.write_parquet(self.fpath(self.metrics_name))
+                self.df_metrics.write_parquet(self.fpath(self.metrics_pq))
                 df_nonest = self._resolve_nested(self.df_metrics)
-                df_nonest.write_csv(self.fpath("_metrics.csv"))
+                df_nonest.write_csv(self.fpath(self.metrics_csv))
             df_stats = self._fetch_stats()
-            df_stats.write_parquet(self.fpath(self.stats_name))
+            df_stats.write_parquet(self.fpath(self.stats_pq))
             df_nonest = self._resolve_nested(self.df_metrics)
-            df_nonest.write_csv(self.fpath("_stats.csv"))
+            df_nonest.write_csv(self.fpath(self.stats_csv))
             
     def _resolve_nested(self, df):
         nested_columns = [name for name, dtype in zip(df.columns, df.dtypes) if dtype.is_nested()]
-
-        # nested_types = (pl.List, pl.Struct)
-        # nested_columns = [name for name, dtype in df.schema.items() if isinstance(dtype, nested_types)]
         for name in nested_columns:
             try:
-                # df = df.with_columns([pl.col(name).list.mean().alias(name) for name in nested_columns])
                 df = df.with_columns([(pl.lit("mean: ") + pl.col(name).list.mean().cast(pl.Utf8)).alias(name)])
             except PolarsError:
-                # df = df.with_columns([pl.col(name).list.last().alias(name) for name in nested_columns])
                 df = df.with_columns([(pl.lit("last: ") + pl.col(name).list.last().cast(pl.Utf8)).alias(name)])
                 
         return df
@@ -186,10 +194,12 @@ class RunManager(PathManager):
         
         return run_ids, stats_paths
             
-    def ref_results(self, step=None, itv=None, last_step=None, fname="results.parquet", refresh=True, met_listed=False):
+    def ref_results(self, step=None, itv=None, last_step=None, fname=None, refresh=True, met_listed=False):
+        if fname is None:
+            fname = self.results_pq
         if utils.interval(step=step, itv=itv, last_step=last_step):
-            run_ids, params_paths = self.fetch_files(self.params_name)
-            run_ids, metrics_paths = self.fetch_files(self.metrics_name)
+            run_ids, params_paths = self.fetch_files(self.params_pq)
+            run_ids, metrics_paths = self.fetch_files(self.metrics_pq)
 
             stats_l = []
             for run_id, params_path, metrics_path in zip(run_ids, params_paths, metrics_paths):
@@ -207,12 +217,10 @@ class RunManager(PathManager):
                 stats_l.append(df_run)
                 
             df = pl.concat(stats_l, how="diagonal_relaxed").sort(pl.col("run_id"))
-            # if refresh  or  not met_listed:
-                # df = df.with_columns(pl.col([col for col, dtype in df.schema.items() if dtype.is_nested()]).list.last().name.keep()) 
             if refresh:
                 df.write_parquet(self.exp_path / Path(fname))
                 df_nonest = self._resolve_nested(df)
-                df_nonest.write_csv(self.exp_path / Path("results.csv"))
+                df_nonest.write_csv(self.exp_path / Path(self.results_csv))
             return df
 
 class RunsManager:
@@ -272,35 +280,8 @@ class RunsManager:
 
 
 class RunViewer(RunManager, PathManager):
-    def __init__(self, exc_path=None, exp_name="exp_default", exp_path=None, run_id=None):
-        PathManager.__init__(self, exc_path, exp_name, exp_path)
-
-        # 応急処置
-        # RunManagerのmkdir周りを最初の格納時に行い、init周りを整理
-        self.params_name = "_params.parquet"
-        self.metrics_name = "_metrics.parquet"
-        self.stats_name = "_stats.parquet"
+    def __init__(self, exec_path=None, exp_name="exp_default", exp_path=None, run_id=None):
+        PathManager.__init__(self, exec_path, exp_name, exp_path)
         
-    def fetch_results(self, fname="results.parquet", refresh=True, met_listed=False):
+    def fetch_results(self, fname=None, refresh=True, met_listed=False):
         return self.ref_results(fname=fname, refresh=refresh, met_listed=met_listed)
-
-    # def _fetch_metrics(self, listed=False):
-    #     run_ids, stats_paths = self.fetch_files("metrics.csv")
-
-    #     stats_l = []
-    #     for run_id, stats_path in zip(run_ids, stats_paths):
-    #         try:
-    #             df_stats = pl.read_csv(stats_path)
-    #             df_stats_wid = df_stats.with_columns(pl.lit(run_id).alias("run_id"))
-    #             df_stats_wid = df_stats_wid.select(["run_id"] + df_stats.columns)
-    #             stats_l.append(df_stats_wid)
-    #         except FileNotFoundError:
-    #             # metrics.csvがない場合Errorが発生する。
-    #             pass
-    #     if listed:
-    #         return stats_l
-    #     else:
-    #         df = pl.concat(stats_l, how="diagonal_relaxed").sort(pl.col("step")).sort(pl.col("run_id"))
-    #         return df
-        
-        

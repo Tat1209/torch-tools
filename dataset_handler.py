@@ -274,7 +274,7 @@ class DatasetHandler(Dataset):
         if setting_id:
             ms_dict = self._make_ds_cache(f"{setting_id}.ms", self.calc_mean_std)
         else:
-            ms_dict = self._make_ds_cache(f"{self.state["dataset_id"]}.ms", lambda: self.calc_mean_std(base=True))
+            ms_dict = self._make_ds_cache(f'{self.state["dataset_id"]}.ms', lambda: self.calc_mean_std(base=True))
 
         mean, std = ms_dict["mean"], ms_dict["std"]
         return transforms.Normalize(mean=mean, std=std, inplace=inplace)

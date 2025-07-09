@@ -363,3 +363,35 @@ class TimeLog:
             full_end = time.time()
             full_elapsed = full_end - full_start
             instance._time_data[full_key] = instance._time_data.get(full_key, 0.0) + full_elapsed
+
+class SkipManager:
+    def __init__(self):
+        self.reached = False
+
+    def is_reached(self, tuples) -> bool:
+        if self.reached:
+            return True
+        elif all(all(x == t[0] for x in t) for t in tuples):
+            self.reached = True
+            return True
+        else:
+            return False
+
+def is_reached(*args) -> bool:
+    # SkipManager の関数版実装 1実行につき判定できる瞬間は1回
+    # もし複数回使えるようにしたいなら，tag引数も受け取れるようにして区別できるような仕様にするとか？
+    if not hasattr(is_reached, "reached"):
+        is_reached.reached = False
+    if not hasattr(is_reached, "skip_count"):
+        is_reached.skip_count = 0
+
+    if is_reached.reached:
+        return True
+
+    if all(t[0] == t[1] for t in args):
+        is_reached.reached = True
+        print(f"Skipped {is_reached.skip_count} times before reaching.")
+        return True
+    else:
+        is_reached.skip_count += 1
+        return False

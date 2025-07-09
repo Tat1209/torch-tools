@@ -1,8 +1,8 @@
 import shutil
 from pathlib import Path
 
+import numpy as np
 import polars as pl
-from polars.exceptions import PolarsError
 
 import utils
 
@@ -32,12 +32,10 @@ class PathManager:
 class RunManager(PathManager):
     params_pq = "_params.parquet"
     metrics_pq = "_metrics.parquet"
-    stats_pq = "_stats.parquet"
     results_pq = "_results.parquet"
 
     params_csv = "_params.csv"
     metrics_csv = "_metrics.csv"
-    stats_csv = "_stats.csv"
     results_csv = "_results.csv"
 
     def __init__(self, exec_path=None, exp_name="exp_default", exp_path=None, run_id=None, exp_tpl="exp_tpl"):
@@ -100,11 +98,21 @@ class RunManager(PathManager):
         self.log_params({name: value})
 
     def log_params(self, stored_dict):
-        stored_dict = {k: [v] for k, v in stored_dict.items()}
+        processed_dict = {}
+        for k, v in stored_dict.items():
+            try:
+            # paramがlistのとき，explodeの処理をかけたくないのにかけられる．Arrayに変換して区別できるように
+                if isinstance(v, list):
+                    v = np.array(v)
+                processed_dict[k] = [v]
+            except Exception as e:
+                raise ValueError(f"キー '{k}' の値を NumPy 配列に変換できませんでした。すべての要素が同じ型である必要があります。") from e
+
+        df_new = pl.DataFrame(processed_dict)
         if self.df_params is None:
-            self.df_params = pl.DataFrame(stored_dict)
+            self.df_params = df_new
         else:
-            self.df_params = self.df_params.hstack(pl.DataFrame(stored_dict))
+            self.df_params = self.df_params.hstack(df_new)
 
     def log_metric(self, name, value, step):
         self.log_metrics({name: value}, step=step)
@@ -148,44 +156,27 @@ class RunManager(PathManager):
             self.df_params = pl.read_parquet(self.fpath(self.params_pq))
         if self.fpath(self.metrics_pq).exists():
             self.df_metrics = pl.read_parquet(self.fpath(self.metrics_pq))
-
-    def _fetch_stats(self):
-            if self.df_params is not None and self.df_metrics is not None:
-                return self.df_params.hstack(self.df_metrics[-1].select(pl.all().exclude("step")))
-
-            elif self.df_params is not None:
-                return self.df_params
-
-            elif self.df_metrics is not None:
-                return self.df_metrics[-1].select(pl.all().exclude("step"))
-
-            else:
-                return pl.DataFrame()
-
-    def ref_stats(self, step=None, itv=None, last_step=None):
-        if utils.interval(step=step, itv=itv, last_step=last_step):
-            if self.df_params is not None:
-                self.df_params.write_parquet(self.fpath(self.params_pq))
-                df_nonest = self._resolve_nested(self.df_params)
-                df_nonest.write_csv(self.fpath(self.params_csv))
-            if self.df_metrics is not None:
-                self.df_metrics.write_parquet(self.fpath(self.metrics_pq))
-                df_nonest = self._resolve_nested(self.df_metrics)
-                df_nonest.write_csv(self.fpath(self.metrics_csv))
-            df_stats = self._fetch_stats()
-            df_stats.write_parquet(self.fpath(self.stats_pq))
-            df_nonest = self._resolve_nested(self.df_metrics)
-            df_nonest.write_csv(self.fpath(self.stats_csv))
             
     def _resolve_nested(self, df):
         nested_columns = [name for name, dtype in zip(df.columns, df.dtypes) if dtype.is_nested()]
         for name in nested_columns:
             try:
-                df = df.with_columns([(pl.lit("mean: ") + pl.col(name).list.mean().cast(pl.Utf8)).alias(name)])
-            except PolarsError:
                 df = df.with_columns([(pl.lit("last: ") + pl.col(name).list.last().cast(pl.Utf8)).alias(name)])
+            except (pl.exceptions.InvalidOperationError, pl.exceptions.SchemaError):
+                df = df.with_columns([pl.lit("(nested_data)").alias(name)])
                 
         return df
+            
+    def ref_stats(self, step=None, itv=None, last_step=None):
+        if utils.interval(step=step, itv=itv, last_step=last_step):
+            if self.df_params is not None:
+                self.df_params.write_parquet(self.fpath(self.params_pq))
+                df_nonest = self.df_params.pipe(self._resolve_nested)
+                df_nonest.write_csv(self.fpath(self.params_csv))
+            if self.df_metrics is not None:
+                self.df_metrics.write_parquet(self.fpath(self.metrics_pq))
+                df_nonest = self.df_metrics.pipe(self._resolve_nested)
+                df_nonest.write_csv(self.fpath(self.metrics_csv))
 
     def fetch_files(self, fname):
         dir_names = list(self.runs_path.iterdir())
@@ -194,7 +185,7 @@ class RunManager(PathManager):
         
         return run_ids, stats_paths
             
-    def ref_results(self, step=None, itv=None, last_step=None, fname=None, refresh=True, met_listed=False):
+    def ref_results(self, step=None, itv=None, last_step=None, fname=None, refresh=True):
         if fname is None:
             fname = self.results_pq
         if utils.interval(step=step, itv=itv, last_step=last_step):
@@ -209,19 +200,19 @@ class RunManager(PathManager):
                     df_run = df_run.hstack(df_params)
                 if metrics_path.exists():
                     df_metrics = pl.read_parquet(metrics_path)
-                    if met_listed:
-                        df_metrics = df_metrics.select(pl.all().implode())
-                    else:
-                        df_metrics = df_metrics[-1].select(pl.all().exclude("step"))
+                    df_metrics = df_metrics.select(pl.all().implode())
                     df_run = df_run.hstack(df_metrics)
                 stats_l.append(df_run)
                 
             df = pl.concat(stats_l, how="diagonal_relaxed").sort(pl.col("run_id"))
             if refresh:
                 df.write_parquet(self.exp_path / Path(fname))
-                df_nonest = self._resolve_nested(df)
+                df_nonest = df.pipe(self._resolve_nested)
                 df_nonest.write_csv(self.exp_path / Path(self.results_csv))
-            return df
+                return df
+            else:
+                pl.read_parquet(self.exp_path / Path(fname))
+                return df
 
 class RunsManager:
     def __init__(self, runs):
@@ -280,8 +271,21 @@ class RunsManager:
 
 
 class RunViewer(RunManager, PathManager):
-    def __init__(self, exec_path=None, exp_name="exp_default", exp_path=None, run_id=None):
+    def __init__(self, exec_path=None, exp_name="exp_default", exp_path=None):
         PathManager.__init__(self, exec_path, exp_name, exp_path)
         
-    def fetch_results(self, fname=None, refresh=True, met_listed=False):
-        return self.ref_results(fname=fname, refresh=refresh, met_listed=met_listed)
+    def fetch_results(self, fname=None, refresh=False):
+        return self.ref_results(fname=fname, refresh=refresh)
+
+    def __getitem__(self, item):
+        return Path(self.runs_path / str(item))
+    
+
+        # if split_pm:
+        #     metrics_columns = [name for name, dtype in df.schema.items() if isinstance(dtype, pl.List) and dtype.inner.is_nested()]
+        #     df_params = df.select(pl.exclude(metrics_columns))
+        #     df_metrics = df.select(metrics_columns)
+        #     return df_params, df_metrics
+        # else:
+        #     return df
+        

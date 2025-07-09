@@ -80,6 +80,84 @@ class Network(nn.Module):
         for param in self.base_model.parameters():
             param.requires_grad = True
         return self
+
+    def param_stat(self, stat_f=lambda p: p.numel(), incl_if=lambda p: True, **kwargs):
+        """
+        パラメータに対して統計を計算し、 統計値を返す。
+
+        Args:
+            stat_f (Callable): パラメータに適用する関数。例: lambda p: p.norm().item()
+            incl_if (Callable): 統計の対象とする条件関数。例: lambda p: p.requires_grad
+
+        Returns:
+            float: 統計値
+        """
+        with torch.no_grad():
+            def flatten_params():
+                for p in self.base_model.parameters():
+                    if incl_if(p):
+                        yield p.flatten()
+
+        all_concat = torch.cat(tuple(flatten_params()))
+        return stat_f(all_concat)
+    
+    def param_stat_layer(self, stat_f=lambda p: p.numel(), incl_if=lambda p: True, **kwargs):
+        """
+        各層のパラメータに対して統計を計算し、{層名: 統計値}の辞書を返す。
+
+        Args:
+            stat_f (Callable): パラメータに適用する関数。例: lambda p: p.norm().item()
+            incl_if (Callable): 統計の対象とする条件関数。例: lambda p: p.requires_grad
+
+        Returns:
+            dict: {層名(str): 統計値(float)}
+        """
+        stats = {}
+        with torch.no_grad():
+            for name, param in self.base_model.named_parameters():
+                if incl_if(param):
+                    stats[name] = stat_f(param)
+        return stats
+    
+    def grad_stat(self, stat_f=lambda g: g.numel(), incl_if=lambda p: p.grad is not None) -> float:
+        """
+        全勾配に対して統計を計算し、単一の統計値を返す。
+
+        Args:
+            stat_f (Callable): 勾配に適用する関数。例: lambda g: g.norm().item()
+            incl_if (Callable): 対象パラメータを選別する関数。例: lambda p: p.requires_grad and p.grad is not None
+
+        Returns:
+            float: 統計値 (勾配が存在しない場合は0)
+        """
+        grads = []
+        for p in self.base_model.parameters():
+            if incl_if(p):
+                g = p.grad
+                grads.append(g.flatten())
+        if not grads:
+            return 0.0
+        all_grads = torch.cat(grads)
+        return stat_f(all_grads)
+
+    def grad_stat_layer(self, stat_f=lambda g: g.numel(), incl_if=lambda p: p.grad is not None) -> dict:
+        """
+        各勾配層ごとに統計を計算し、層名->統計値の辞書を返す。
+
+        Args:
+            stat_f (Callable): 勾配に適用する関数。例: lambda g: g.norm().item()
+            incl_if (Callable): 対象パラメータを選別する関数。例: lambda p: p.requires_grad and p.grad is not None
+
+        Returns:
+            Dict[str, float]: 層名->統計値
+        """
+        stats = {}
+        for name, param in self.base_model.named_parameters():
+            if incl_if(param):
+                g = param.grad
+                stats[name] = stat_f(g)
+        return stats
+
     
     def repr_network(self, **kwargs):
         return repr(self.base_model)
@@ -219,7 +297,7 @@ class Trainer(TrainerUtils):
         return self.agg_epoch(stats_l)
     
     # @TimeLog("dur_val", mode="add")
-    # @TimeLog("dur_total", mode="add")
+    @TimeLog("dur_total", mode="add")
     def val_1epoch(self, dl):
         if dl is None:
             return None

@@ -23,7 +23,6 @@ class FixRandomDataset(Dataset):
     def __getitem__(self, index):
         data = self.data.detach().clone()
         target = index
-        # target = 1
         return data, target
 
     def __len__(self):

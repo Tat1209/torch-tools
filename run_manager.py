@@ -280,12 +280,17 @@ class RunViewer(RunManager, PathManager):
     def __getitem__(self, item):
         return Path(self.runs_path / str(item))
     
+    
+def cat_results(exp_paths, refresh=False):
+    dfs = []
+    for exp_path in exp_paths:
+        exp_name = exp_path.name
+        df = RunViewer(exp_path=exp_path).fetch_results(refresh=refresh)
+        df = df.with_columns(pl.lit(exp_name).alias("exp_name"))
+        df = df.select(["exp_name", *df.columns[:-1]])
 
-        # if split_pm:
-        #     metrics_columns = [name for name, dtype in df.schema.items() if isinstance(dtype, pl.List) and dtype.inner.is_nested()]
-        #     df_params = df.select(pl.exclude(metrics_columns))
-        #     df_metrics = df.select(metrics_columns)
-        #     return df_params, df_metrics
-        # else:
-        #     return df
+        dfs.append(df)
+
+    dfs = pl.concat(dfs, how="diagonal_relaxed")
+    return dfs
         

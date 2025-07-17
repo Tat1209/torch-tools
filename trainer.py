@@ -294,7 +294,7 @@ class Trainer(TrainerUtils):
         if self.scheduler is not None:
             self.scheduler.step()
 
-        return self.agg_epoch(stats_l)
+        return self.train_agg(stats_l)
     
     # @TimeLog("dur_val", mode="add")
     @TimeLog("dur_total", mode="add")
@@ -310,9 +310,19 @@ class Trainer(TrainerUtils):
                 stats = self.val_1batch(inputs, labels)
                 stats_l.append(stats)
 
-        return self.agg_epoch(stats_l)
+        return self.val_agg(stats_l)
     
-    def agg_epoch(self, stats_l, mode=None):
+    def train_agg(self, stats_l, mode=None):
+        total_loss = sum(stats["batch_loss"] for stats in stats_l)
+        total_corr = sum(stats["batch_corr"] for stats in stats_l)
+        total_ndata = sum(stats["batch_ndata"] for stats in stats_l)
+        
+        loss = total_loss / total_ndata
+        acc = total_corr / total_ndata
+        
+        return loss, acc
+
+    def val_agg(self, stats_l, mode=None):
         total_loss = sum(stats["batch_loss"] for stats in stats_l)
         total_corr = sum(stats["batch_corr"] for stats in stats_l)
         total_ndata = sum(stats["batch_ndata"] for stats in stats_l)
@@ -445,7 +455,7 @@ class MultiTrainer(TrainerUtils):
             for i, trainer in enumerate(self.trainers):
                 stats = trainer.train_1batch(inputs, labels)
                 stats_ll[i].append(stats)
-        agg_l = [trainer.agg_epoch(stats_l) for trainer, stats_l in zip(self.trainers, stats_ll)]
+        agg_l = [trainer.train_agg(stats_l) for trainer, stats_l in zip(self.trainers, stats_ll)]
         if agg_f:
             agg_l = agg_f(agg_l)                
 
@@ -464,7 +474,7 @@ class MultiTrainer(TrainerUtils):
                 for i, trainer in enumerate(self.trainers):
                     stats = trainer.val_1batch(inputs, labels)
                     stats_ll[i].append(stats)
-            agg_l = [trainer.agg_epoch(stats_l) for trainer, stats_l in zip(self.trainers, stats_ll)]
+            agg_l = [trainer.val_agg(stats_l) for trainer, stats_l in zip(self.trainers, stats_ll)]
         if agg_f:
             agg_l = agg_f(agg_l)                
 

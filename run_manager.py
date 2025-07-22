@@ -1,3 +1,4 @@
+import glob
 import shutil
 from pathlib import Path
 
@@ -280,17 +281,34 @@ class RunViewer(RunManager, PathManager):
     def __getitem__(self, item):
         return Path(self.runs_path / str(item))
     
-    
+
 def cat_results(exp_paths, refresh=False):
+    """
+    指定されたパスパターンに一致するすべての結果ファイルを連結して一つのDataFrameにします。
+
+    Args:
+        exp_paths (list of str or Path): ファイルパス/パターンのリスト。ワイルドカード ('*', '**') を含むことが可能。
+        refresh (bool, optional): RunViewerのキャッシュをリフレッシュするかどうか。デフォルトは False。
+
+    Returns:
+        polars.DataFrame: 連結された結果のDataFrame。
+    """
+    file_paths = set()
+    for pattern in exp_paths:
+        file_paths.update(glob.glob(str(pattern), recursive=True))
+
     dfs = []
-    for exp_path in exp_paths:
-        exp_name = exp_path.name
-        df = RunViewer(exp_path=exp_path).fetch_results(refresh=refresh)
-        df = df.with_columns(pl.lit(exp_name).alias("exp_name"))
-        df = df.select(["exp_name", *df.columns[:-1]])
-
-        dfs.append(df)
-
-    dfs = pl.concat(dfs, how="diagonal_relaxed")
-    return dfs
+    for file_path_str in sorted(list(file_paths)):
+        exp_path = Path(file_path_str)
         
+        if exp_path.is_dir():
+            exp_name = exp_path.name
+            df = RunViewer(exp_path=exp_path).fetch_results(refresh=refresh)
+            df = df.with_columns(pl.lit(exp_name).alias("exp_name"))
+            df = df.select(["exp_name", *df.columns[:-1]])
+            dfs.append(df)
+            
+    dfs_cat = pl.concat(dfs, how="diagonal_relaxed")
+    
+    return dfs_cat
+

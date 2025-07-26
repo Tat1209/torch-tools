@@ -21,16 +21,8 @@ def get_stat(df_row: pl.DataFrame) -> pl.DataFrame:
     
     return df
 
-import polars as pl
-
 class Config:
     def __init__(self, **overrides):
-        # with pl.Config(
-        #         tbl_cols=-1,
-        #         fmt_str_lengths = 40, 
-        #         tbl_width_chars=-1,
-        #         tbl_cell_numeric_alignment="RIGHT"
-        #     ):
         self.defaults = {
             "tbl_cols": -1,
             "fmt_str_lengths": 24,
@@ -40,10 +32,10 @@ class Config:
         self.options = {**self.defaults, **overrides}
         self.cfg = pl.Config(**self.options)
 
-    def __enter__(self):
         self.cfg.__enter__()
+
+    def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        # polars Configのコンテキストを終了
         self.cfg.__exit__(exc_type, exc_val, exc_tb)

@@ -450,11 +450,13 @@ class MultiTrainer(TrainerUtils):
         
         stats_ll = [[] for _ in self.trainers]
         for inputs, labels in TimeLog.iter_load(self, "dur_dl_train", dl):
-        # for inputs, labels in dl:
             inputs, labels = inputs.to(self.device), labels.to(self.device)
             for i, trainer in enumerate(self.trainers):
                 stats = trainer.train_1batch(inputs, labels)
                 stats_ll[i].append(stats)
+
+        [trainer.scheduler.step() for trainer in self.trainers if trainer.scheduler]
+
         agg_l = [trainer.train_agg(stats_l) for trainer, stats_l in zip(self.trainers, stats_ll)]
         if agg_f:
             agg_l = agg_f(agg_l)                

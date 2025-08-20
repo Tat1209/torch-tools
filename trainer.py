@@ -401,6 +401,37 @@ class Trainer(TrainerUtils):
             return self.scheduler.get_last_lr()[0] # recommended
         return self.optimizer.param_groups[0]["lr"]
 
+    def get_momentum_norm(self):
+        """
+        オプティマイザの運動量バッファ全体のL2ノルムを計算します。
+        SGDの'momentum_buffer'とAdam系の'exp_avg'に対応します。
+        該当するバッファがない場合はNoneを返します。
+        """
+        def get_all_buffers():
+            """オプティマイザのstateから全ての運動量バッファをyieldするジェネレータ"""
+            # 一般的なオプティマイザの運動量バッファのキー名
+            # SGDは 'momentum_buffer', Adam/AdamW/RMSprop等は 'exp_avg' を使用
+            buffer_keys = ('momentum_buffer', 'exp_avg')
+            
+            for group in self.optimizer.param_groups:
+                for p in group['params']:
+                    state = self.optimizer.state.get(p)
+                    if state:
+                        # パラメータに対応するバッファを探索し、最初に見つかったものを返す
+                        buf = next((state.get(key) for key in buffer_keys if state.get(key) is not None), None)
+                        if buf is not None:
+                            yield buf.flatten()
+
+        # torch.catが空のシーケンスを受け付けないため、一度リストに変換して存在確認
+        all_buffers = list(get_all_buffers())
+        if not all_buffers:
+            return 0
+
+        # バッファを結合してノルムを計算
+        with torch.no_grad():
+            all_concat = torch.cat(all_buffers)
+            return torch.linalg.norm(all_concat).item()
+       
     def fmt_criterion(self):
         return self.criterion.__class__.__name__
 

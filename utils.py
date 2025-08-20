@@ -377,21 +377,56 @@ class SkipManager:
         else:
             return False
 
-def is_reached(*args) -> bool:
-    # SkipManager の関数版実装 1実行につき判定できる瞬間は1回
-    # もし複数回使えるようにしたいなら，tag引数も受け取れるようにして区別できるような仕様にするとか？
-    if not hasattr(is_reached, "reached"):
-        is_reached.reached = False
-    if not hasattr(is_reached, "skip_count"):
-        is_reached.skip_count = 0
+# def is_reached(*args) -> bool:
+#     # SkipManager の関数版実装 1実行につき判定できる瞬間は1回
+#     # もし複数回使えるようにしたいなら，tag引数も受け取れるようにして区別できるような仕様にするとか？
+#     if not hasattr(is_reached, "reached"):
+#         is_reached.reached = False
+#     if not hasattr(is_reached, "skip_count"):
+#         is_reached.skip_count = 0
+#
+#     if is_reached.reached:
+#         return True
+#
+#     if all(t[0] == t[1] for t in args):
+#         is_reached.reached = True
+#         print(f"Skipped {is_reached.skip_count} times before reaching.")
+#         return True
+#     else:
+#         is_reached.skip_count += 1
+#         return False
+    
+def is_reached(*args, tag="tmp") -> bool:
+    """
+    タグによって区別することで、複数のチェックを独立して実行できる SkipManager の関数版。
+    
+    Args:
+        tag (str): チェックを一位に識別するための文字列。
+        *args: (現在値, 目標値) のタプルを可変長引数として受け取る。
+    
+    Returns:
+        bool: 条件が一度でも満たされたら True を返し続ける。それ以外は False。
+    """
+    # 状態を保存するための辞書を関数オブジェクトに持たせる
+    if not hasattr(is_reached, "states"):
+        is_reached.states = {}
 
-    if is_reached.reached:
+    # このタグ用の状態がなければ初期化する
+    if tag not in is_reached.states:
+        is_reached.states[tag] = {"reached": False, "skip_count": 0}
+
+    # このタグに紐づく状態を取得
+    tag_state = is_reached.states[tag]
+
+    # すでに一度条件を満たしている場合は、常にTrueを返す
+    if tag_state["reached"]:
         return True
 
+    # すべての引数ペアが (現在値 == 目標値) になっているか判定
     if all(t[0] == t[1] for t in args):
-        is_reached.reached = True
-        print(f"Skipped {is_reached.skip_count} times before reaching.")
+        tag_state["reached"] = True
+        print(f"[{tag}] Skipped {tag_state['skip_count']} times before reaching.")
         return True
     else:
-        is_reached.skip_count += 1
+        tag_state['skip_count'] += 1
         return False

@@ -425,7 +425,7 @@ class Trainer(TrainerUtils):
         # torch.catが空のシーケンスを受け付けないため、一度リストに変換して存在確認
         all_buffers = list(get_all_buffers())
         if not all_buffers:
-            return 0
+            return 0.0
 
         # バッファを結合してノルムを計算
         with torch.no_grad():

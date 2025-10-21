@@ -1,8 +1,15 @@
 """
-    The following implementation is rewritten based on the official implementation: 
-    https://github.com/weiaicunzai/pytorch-cifar100/blob/master/models/resnet.py
-    
+A ResNet model with an architecture adapted for smaller image datasets 
+like CIFAR-10/100 (32x32), based on the implementation by weiaicunzai.
+
+Source:
+https://github.com/weiaicunzai/pytorch-cifar100/blob/master/models/resnet.py
+
+Architectural changes from the standard torchvision model include:
+- The initial Conv2d layer uses a 3x3 kernel with stride 1.
+- The initial MaxPool2d layer is removed to preserve spatial resolution.
 """
+
 from functools import partial
 from typing import Any, Callable, List, Optional, Type, Union
 

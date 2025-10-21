@@ -1,3 +1,9 @@
+"""
+This model is the official ResNet implementation from torchvision.models.
+It is primarily designed and optimized for large-scale image classification 
+tasks, such as on the ImageNet dataset (224x224 images).
+"""
+
 from functools import partial
 from typing import Any, Callable, List, Optional, Type, Union
 

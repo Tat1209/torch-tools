@@ -158,7 +158,6 @@ class Network(nn.Module):
                 stats[name] = stat_f(g)
         return stats
 
-    
     def repr_network(self, **kwargs):
         return repr(self.base_model)
 

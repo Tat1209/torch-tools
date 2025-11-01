@@ -1,13 +1,16 @@
 import functools
 import inspect
+import itertools
 import math
 import random
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
 
 import numpy as np
+
+from network import Network
 
 
 def interval(step=None, itv=None, last_step=None):
@@ -377,25 +380,6 @@ class SkipManager:
         else:
             return False
 
-# def is_reached(*args) -> bool:
-#     # SkipManager の関数版実装 1実行につき判定できる瞬間は1回
-#     # もし複数回使えるようにしたいなら，tag引数も受け取れるようにして区別できるような仕様にするとか？
-#     if not hasattr(is_reached, "reached"):
-#         is_reached.reached = False
-#     if not hasattr(is_reached, "skip_count"):
-#         is_reached.skip_count = 0
-#
-#     if is_reached.reached:
-#         return True
-#
-#     if all(t[0] == t[1] for t in args):
-#         is_reached.reached = True
-#         print(f"Skipped {is_reached.skip_count} times before reaching.")
-#         return True
-#     else:
-#         is_reached.skip_count += 1
-#         return False
-    
 def is_reached(*args, tag="tmp") -> bool:
     """
     タグによって区別することで、複数のチェックを独立して実行できる SkipManager の関数版。
@@ -430,3 +414,78 @@ def is_reached(*args, tag="tmp") -> bool:
     else:
         tag_state['skip_count'] += 1
         return False
+
+def comp_param_stat(models: List, layer_width=30):
+    """
+    nn.Moduleのリストを受け取り、各モデルの層ごとのパラメータ統計（平均と標準偏差）を
+    シンプルなテーブル形式で表示する。
+
+    Args:
+        models (List[nn.Module]): 統計を比較したいPyTorchモデルのリスト。
+    """
+    if not models:
+        print("No models provided.")
+        return
+
+    all_stats_data = []
+    network_names = []
+
+    # 1. 各モデルの統計データを計算して収集する
+    for model in models:
+        # Networkクラスでラップする
+        net = Network(model)
+        network_names.append(model.__class__.__name__)
+        
+        # 層ごとの統計値を取得
+        means = net.param_stat_layer(stat_f=lambda p: p.mean().item())
+        vars = net.param_stat_layer(stat_f=lambda p: p.var().item())
+        
+        # (層名, 平均, 分散) のタプルのリストを作成
+        model_stats = []
+        for name in means.keys():
+            model_stats.append((name, means[name], vars[name]))
+        all_stats_data.append(model_stats)
+
+    # 2. テーブル形式で出力する
+    
+    # 各列の幅を定義
+    L_WIDTH = layer_width  # Layer name
+    M_WIDTH = 10  # Mean
+    S_WIDTH = 10  # var
+    # (L_WIDTH + 1 + M_WIDTH + 1 + S_WIDTH)
+    COL_WIDTH = L_WIDTH + M_WIDTH + S_WIDTH + 2 
+    # 列間のセパレータ（スペース）
+    SEPARATOR = " " * 4 
+
+    # ヘッダーの作成
+    header_names_list = []
+    header_cols_list = []
+    separator_line_list = []
+    
+    for name in network_names:
+        header_names_list.append(f"Network: {name:<{COL_WIDTH - len('Network: ')}}")
+        header_cols_list.append(f"{'Layer':<{L_WIDTH}} {'Mean':>{M_WIDTH}} {'Var':>{S_WIDTH}}")
+        separator_line_list.append("-" * COL_WIDTH)
+
+    print(SEPARATOR.join(header_names_list))
+    print(SEPARATOR.join(separator_line_list))
+    print(SEPARATOR.join(header_cols_list))
+    print(SEPARATOR.join(separator_line_list))
+
+
+    # データ行の作成
+    # 層の数が異なるモデルに対応するため itertools.zip_longest を使用
+    filler = (None, None, None) # 空の層を埋めるためのプレースホルダ
+    for row_data in itertools.zip_longest(*all_stats_data, fillvalue=filler):
+        row_str_list = []
+        for name, mean, var in row_data:
+            if name is not None:
+                part = f"{name:<{L_WIDTH}} {mean:>{M_WIDTH}.6f} {var:>{S_WIDTH}.6f}"
+            else:
+                part = " " * (COL_WIDTH) # 層がない場合は空白で埋める
+            row_str_list.append(part)
+        
+        print(SEPARATOR.join(row_str_list))
+    
+    print(SEPARATOR.join(separator_line_list))
+

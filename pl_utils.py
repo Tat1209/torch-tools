@@ -82,6 +82,16 @@ def unnest_iter(df: pl.DataFrame, iter_epoch_col="iter_step") -> pl.DataFrame:
         )
         
     return df
+
+def resolve_nested(df):
+    nested_columns = [name for name, dtype in zip(df.columns, df.dtypes) if dtype.is_nested()]
+    for name in nested_columns:
+        try:
+            df = df.with_columns([(pl.lit("last: ") + pl.col(name).list.last().cast(pl.Utf8)).alias(name)])
+        except (pl.exceptions.InvalidOperationError, pl.exceptions.SchemaError):
+            df = df.with_columns([pl.lit("(nested_data)").alias(name)])
+            
+    return df
     
 
 

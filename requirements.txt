@@ -1,8 +1,5 @@
---index-url https://download.pytorch.org/whl/cu128
-
-torch
-torchvision
-torchaudio
+# torch は--index-url オプションでインストールするため、ここには記載しない
+# https://pytorch.org/get-started/locally/
 polars
 torchinfo
 matplotlib

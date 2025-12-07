@@ -144,32 +144,8 @@ def generate_task_grid(config: dict[str, Any]) -> list[dict[str, Any]]:
         tasks.append(new_cfg)
     return tasks
 
-def calculate_thread_limit(max_tasks: int | None = None) -> int:
-    """
-    実行環境と並列数に基づいて最適なCPUスレッド数を計算する.
-    """
-    total_cores = os.cpu_count() or 1
-    
-    # 並列数の上限を決定
-    if max_tasks is None:
-        if torch.cuda.is_available():
-            parallel_limit = torch.cuda.device_count()
-        else:
-            parallel_limit = 1
-    else:
-        parallel_limit = max_tasks
-        
-    # 1タスクあたりに割り当て可能なコア数を計算 (最低1)
-    # 単純にコア数をタスク数で割る
-    rec_num_threads = max(1, total_cores // parallel_limit)
-    
-    return rec_num_threads
-
-def _worker_wrapper(task_func: Callable, cfg: dict, gpu_id: int, sys_num_threads: int):
+def _worker_wrapper(task_func: Callable, cfg: dict, gpu_id: int):
     """[内部用] 環境変数をセットしてタスクを実行するラッパー"""
-    if sys_num_threads > 0:
-        torch.set_num_threads(sys_num_threads)
-        torch.set_num_interop_threads(4) # 固定値4 (または必要に応じて調整)
     if gpu_id is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     
@@ -182,12 +158,12 @@ def _worker_wrapper(task_func: Callable, cfg: dict, gpu_id: int, sys_num_threads
         print(f"[Error] Task failed on GPU {gpu_id}")
         traceback.print_exc()
 
-def _spawn_worker(task_func: Callable, cfg: dict, gpu_id: int, sys_num_threads: int) -> multiprocessing.Process:
+def _spawn_worker(task_func: Callable, cfg: dict, gpu_id: int) -> multiprocessing.Process:
     """[ヘルパー] ワーカープロセスの生成と起動"""
     ctx = multiprocessing.get_context('spawn')
     p = ctx.Process(
         target=_worker_wrapper, 
-        args=(task_func, cfg, gpu_id, sys_num_threads),
+        args=(task_func, cfg, gpu_id),
         name=f"Worker-GPU{gpu_id}"
     )
     p.start()
@@ -230,23 +206,24 @@ def parallel_run(
         lock_path (Path): ロックファイルの保存先. デフォルトはホームディレクトリ下.
     """
     
-    sys_num_threads = calculate_thread_limit(max_tasks)
-    print(f"[Scheduler] Auto-config: torch.set_num_threads({sys_num_threads}) per task.")
-    
     tasks = generate_task_grid(config)
     print(f"[Scheduler] Total tasks: {len(tasks)}")
     
+    # { process_object: lock_file_handle }
     running_procs: dict[multiprocessing.Process, IO] = {}
 
     try:
         while tasks or running_procs:
+            # 1. Cleanup
             _cleanup_finished_processes(running_procs)
 
+            # 2. Spawn
             if tasks and (max_tasks is None or len(running_procs) < max_tasks):
+                # ロック確保 (multirunは排他制御必須のため lock=True, avoid_locked=True で固定)
                 res = get_device(
                     avoid_used=avoid_used,
                     util_th=util_th,
-                    avoid_locked=True,
+                    avoid_locked=True, # ロック前提なのでTrueで効率化
                     lock_path=lock_path,
                     lock=True
                 )
@@ -257,8 +234,7 @@ def parallel_run(
                     
                     next_cfg = tasks.pop(0)
                     
-                    p = _spawn_worker(task_func, next_cfg, gpu_id, sys_num_threads)
-                    
+                    p = _spawn_worker(task_func, next_cfg, gpu_id)
                     running_procs[p] = lock_handle
                     
                     print(f"[Scheduler] Assigned task to GPU {gpu_id}. (Running: {len(running_procs)}, Remaining: {len(tasks)})")
@@ -274,8 +250,9 @@ def parallel_run(
         print("\n[Scheduler] KeyboardInterrupt received. Terminating workers...")
         for p in list(running_procs.keys()):
             if p.is_alive():
-                p.terminate()
+                p.terminate() # 強制終了
                 p.join()
+                # ロック解放
                 lock_handle = running_procs[p]
                 if lock_handle:
                     try:

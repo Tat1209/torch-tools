@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from typing import Callable, Dict, List, Union
+from typing import Callable, List, Union
 from collections import defaultdict
 
 class HookManager:

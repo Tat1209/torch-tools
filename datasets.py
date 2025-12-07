@@ -1,18 +1,13 @@
-from enum import Enum
 import pickle
 from pathlib import Path
 
-import numpy as np
 import torch
 import torchvision
 from PIL import Image
-# from torchvision import transforms
 from torch.utils.data import Dataset
 from torchvision.datasets.vision import VisionDataset
-from torchvision.transforms import v2 as transforms
 
 from dataset_handler import DatasetHandler
-
 
 
 class FixRandomDataset(Dataset):

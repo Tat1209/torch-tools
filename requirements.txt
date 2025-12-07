@@ -4,3 +4,6 @@ polars
 torchinfo
 matplotlib
 seaborn
+nvitop
+nvidia-ml-py
+# tabular

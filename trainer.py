@@ -12,12 +12,7 @@ from network import Network, Networks
 
 
 class TrainerUtils:
-    def __init__(self, device):
-        if device is None:
-            self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        else:
-            self.device = device
-
+    def __init__(self):
         self.created_time = time()
 
     def printmet(self, met_dict, e=None, epochs=None, itv: int | float =1, force_print=False):
@@ -99,12 +94,14 @@ class TrainerUtils:
 
 @TimeLog()
 class Trainer(TrainerUtils):
-    def __init__(self, network, criterion, optimizer, scheduler=None, device=None):
-        super().__init__(device)
-        self.network = network.to(self.device)
+    def __init__(self, network: nn.Module | Network, criterion: nn.Module, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler | None, device: torch.device | None, dtype: torch.dtype = torch.float32):
+        super().__init__()
+        self.network = network
         self.criterion = criterion
         self.optimizer = optimizer
         self.scheduler = scheduler
+        self.device = device
+        self.dtype = dtype
         
     @TimeLog("dur_train", mode="add")
     @TimeLog("dur_total", mode="add")
@@ -112,7 +109,7 @@ class Trainer(TrainerUtils):
         stats_l = []
         self.network.train()
         for inputs, labels in dl:
-            inputs, labels = inputs.to(self.device), labels.to(self.device)
+            inputs, labels = inputs.to(self.device, non_blocking=True), labels.to(self.device, non_blocking=True)
             stats = self.train_1batch(inputs, labels)
             stats_l.append(stats)
 
@@ -131,13 +128,13 @@ class Trainer(TrainerUtils):
         self.network.eval()
         with torch.no_grad():
             for inputs, labels in dl:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                inputs, labels = inputs.to(self.device, non_blocking=True), labels.to(self.device, non_blocking=True)
                 stats = self.val_1batch(inputs, labels)
                 stats_l.append(stats)
 
         return self.val_agg(stats_l)
     
-    def train_agg(self, stats_l, mode=None):
+    def train_agg(self, stats_l):
         total_loss = sum(stats["batch_loss"] for stats in stats_l)
         total_corr = sum(stats["batch_corr"] for stats in stats_l)
         total_ndata = sum(stats["batch_ndata"] for stats in stats_l)
@@ -147,7 +144,7 @@ class Trainer(TrainerUtils):
         
         return loss, acc
 
-    def val_agg(self, stats_l, mode=None):
+    def val_agg(self, stats_l):
         total_loss = sum(stats["batch_loss"] for stats in stats_l)
         total_corr = sum(stats["batch_corr"] for stats in stats_l)
         total_ndata = sum(stats["batch_ndata"] for stats in stats_l)
@@ -161,19 +158,19 @@ class Trainer(TrainerUtils):
     @TimeLog("dur_total_core", mode="add")
     def train_1batch(self, inputs, labels):
         outputs, loss = self.forward_flow(inputs, labels)
-        preds, corr = self.eval_flow(outputs, labels)
         self.update_grad(loss)
+        preds, corr = self.eval_flow(outputs, labels)
 
-        stats = {"batch_loss": loss.item() * len(inputs), "batch_corr": corr, "batch_ndata": len(inputs)}
+        stats = {"batch_loss": loss.item() * len(inputs), "batch_corr": corr.item(), "batch_ndata": len(inputs)}
         return stats.copy()
-
+    
     # @TimeLog("dur_val_core", mode="add")
     @TimeLog("dur_total_core", mode="add")
     def val_1batch(self, inputs, labels):
         outputs, loss = self.forward_flow(inputs, labels)
         preds, corr = self.eval_flow(outputs, labels)
 
-        stats = {"batch_loss": loss.item() * len(inputs), "batch_corr": corr, "batch_ndata": len(inputs)}
+        stats = {"batch_loss": loss.item() * len(inputs), "batch_corr": corr.item(), "batch_ndata": len(inputs)}
         return stats.copy()
 
     @TimeLog("dur_pred", mode="add")
@@ -204,17 +201,18 @@ class Trainer(TrainerUtils):
         return all_outputs, all_labels
 
     def forward_flow(self, inputs, labels):
-        outputs = self.network(inputs)
-        loss = self.criterion(outputs, labels)
+        with torch.amp.autocast(device_type=self.device.type, dtype=self.dtype):
+            outputs = self.network(inputs)
+            loss = self.criterion(outputs, labels)
 
         return outputs, loss
 
     def eval_flow(self, outputs, labels):
         preds = torch.argmax(outputs.detach(), dim=1)
-        corr = torch.sum(preds == labels.data).item()
+        corr = torch.sum(preds == labels.data)
 
         return preds, corr
-
+    
     def update_grad(self, loss):
         # 通常は zero_grad -> bachward -> step  効率を考慮するなら backward -> step -> zero_grad
         self.optimizer.zero_grad()
@@ -297,16 +295,36 @@ class Trainer(TrainerUtils):
 
 @TimeLog(stats_name="time_stats_mt")
 class MultiTrainer(TrainerUtils):
-    def __init__(self, trainers, device=None):
-        super().__init__(device)
+    def __init__(self, trainers: list[Trainer]):
+        super().__init__()
         self.trainers = trainers
+        
+        target_device = trainers[0].device
+        for i, t in enumerate(trainers):
+            if t.device != target_device:
+                raise ValueError(
+                    f"All trainers must be on the same device for MultiTrainer optimization.\n"
+                    f"Trainer 0 is on {target_device}, but Trainer {i} is on {t.device}."
+                )
+        self.device = target_device
+
+        dtypes = {t.dtype for t in trainers}
+        if len(dtypes) == 1: # 全Trainerのdtypeが同じ場合
+            dtype_input = list(dtypes)[0]  # 共通するdtypeを返す (例: torch.bfloat16)
+            self.dtype_input = dtype_input  # inputsに対するキャストを行い，複数回のキャストを避ける．各Trainerのdtypeとは別．Trainerの各dtypeが同じなら設定しとくといいかも．
+        else:
+            self.dtype_input = None
 
     def train_1epoch(self, dl, agg_f=lambda agg_l: map(list, zip(*agg_l))):
         [trainer.network.train() for trainer in self.trainers]
         
         stats_ll = [[] for _ in self.trainers]
         for inputs, labels in TimeLog.iter_load(self, "dur_dl_train", dl):
-            inputs, labels = inputs.to(self.device), labels.to(self.device)
+            if self.dtype_input:
+                inputs = inputs.to(self.device, dtype=self.dtype_input, non_blocking=True)
+            else:
+                inputs = inputs.to(self.device, non_blocking=True)
+            labels = labels.to(self.device, non_blocking=True)
             for i, trainer in enumerate(self.trainers):
                 stats = trainer.train_1batch(inputs, labels)
                 stats_ll[i].append(stats)
@@ -328,7 +346,11 @@ class MultiTrainer(TrainerUtils):
         with torch.no_grad():
             stats_ll = [[] for _ in self.trainers]
             for inputs, labels in dl:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                if self.dtype_input:
+                    inputs = inputs.to(self.device, dtype=self.dtype_input, non_blocking=True)
+                else:
+                    inputs = inputs.to(self.device, non_blocking=True)
+                labels = labels.to(self.device, non_blocking=True)
                 for i, trainer in enumerate(self.trainers):
                     stats = trainer.val_1batch(inputs, labels)
                     stats_ll[i].append(stats)
@@ -376,7 +398,7 @@ class MergeEnsemble(Trainer):
                 preds, corr = trainer.eval_flow(outputs, labels)
 
                 total_losses[i] += loss.item() * len(inputs)
-                total_corrs[i] += corr
+                total_corrs[i] += corr.item()
 
                 outputs_l.append(outputs)
 
@@ -427,7 +449,7 @@ class MergeEnsemble(Trainer):
                     preds, corr = trainer.eval_flow(outputs, labels)
 
                     total_losses[i] += loss.item() * len(inputs)
-                    total_corrs[i] += corr
+                    total_corrs[i] += corr.item()
 
                     outputs_l.append(outputs)
 

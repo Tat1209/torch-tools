@@ -1,16 +1,15 @@
+import fcntl
 import functools
 import inspect
-import itertools
 import math
 import random
 import time
+import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
+from typing import IO, Any, Callable, Dict, Iterable, Iterator, List, Optional
 
 import numpy as np
-
-from network import Network
 
 
 def interval(step=None, itv=None, last_step=None):
@@ -99,14 +98,62 @@ def format_duration(duration_s, style=0) -> str:
                     
         return fmt_str
     
-def format_time(time, style=0):
+def format_time(timestamp: float = None, style: int = 0) -> str:
+    """
+    タイムスタンプを指定された書式の文字列に変換します。
+    
+    Args:
+        timestamp (float | None): time.time()などで取得したUNIX時間。Noneの場合は現在時刻。
+        style (int): フォーマットのスタイル指定
+    """
+    if timestamp is None:
+        dt = datetime.now()
+    else:
+        dt = datetime.fromtimestamp(timestamp)
+    
     if style == 0:
-        return datetime.fromtimestamp(time).strftime("%Y/%m/%d %H:%M")
+        return dt.strftime("%Y/%m/%d %H:%M")
     elif style == 1:
-        return datetime.fromtimestamp(time).strftime("%Y/%m/%d %H:%M:%S")
+        return dt.strftime("%Y/%m/%d %H:%M:%S")
+    elif style == 2:
+        return dt.strftime("%Y-%m-%d_%H-%M-%S_%f")
     else:
         raise ValueError(f"Unknown format style: {style}")
 
+def is_reached(*args, tag="tmp") -> bool:
+    """
+    タグによって区別することで、複数のチェックを独立して実行できる SkipManager の関数版。
+    
+    Args:
+        tag (str): チェックを一位に識別するための文字列。
+        *args: (現在値, 目標値) のタプルを可変長引数として受け取る。
+    
+    Returns:
+        bool: 条件が一度でも満たされたら True を返し続ける。それ以外は False。
+    """
+    # 状態を保存するための辞書を関数オブジェクトに持たせる
+    if not hasattr(is_reached, "states"):
+        is_reached.states = {}
+
+    # このタグ用の状態がなければ初期化する
+    if tag not in is_reached.states:
+        is_reached.states[tag] = {"reached": False, "skip_count": 0}
+
+    # このタグに紐づく状態を取得
+    tag_state = is_reached.states[tag]
+
+    # すでに一度条件を満たしている場合は、常にTrueを返す
+    if tag_state["reached"]:
+        return True
+
+    # すべての引数ペアが (現在値 == 目標値) になっているか判定
+    if all(t[0] == t[1] for t in args):
+        tag_state["reached"] = True
+        print(f"[{tag}] Skipped {tag_state['skip_count']} times before reaching.")
+        return True
+    else:
+        tag_state['skip_count'] += 1
+        return False
 
 class TimeLog:
     """
@@ -380,112 +427,37 @@ class SkipManager:
         else:
             return False
 
-def is_reached(*args, tag="tmp") -> bool:
-    """
-    タグによって区別することで、複数のチェックを独立して実行できる SkipManager の関数版。
-    
-    Args:
-        tag (str): チェックを一位に識別するための文字列。
-        *args: (現在値, 目標値) のタプルを可変長引数として受け取る。
-    
-    Returns:
-        bool: 条件が一度でも満たされたら True を返し続ける。それ以外は False。
-    """
-    # 状態を保存するための辞書を関数オブジェクトに持たせる
-    if not hasattr(is_reached, "states"):
-        is_reached.states = {}
+class LazyPipeline:
+    def __init__(self, seed_obj: Any, _steps: List[dict] = None):
+        self._seed_obj = seed_obj
+        self._steps = _steps or []
 
-    # このタグ用の状態がなければ初期化する
-    if tag not in is_reached.states:
-        is_reached.states[tag] = {"reached": False, "skip_count": 0}
+    def __repr__(self):
+        return f"<{self.__class__.__name__}: {self.history()}>"
 
-    # このタグに紐づく状態を取得
-    tag_state = is_reached.states[tag]
-
-    # すでに一度条件を満たしている場合は、常にTrueを返す
-    if tag_state["reached"]:
-        return True
-
-    # すべての引数ペアが (現在値 == 目標値) になっているか判定
-    if all(t[0] == t[1] for t in args):
-        tag_state["reached"] = True
-        print(f"[{tag}] Skipped {tag_state['skip_count']} times before reaching.")
-        return True
-    else:
-        tag_state['skip_count'] += 1
-        return False
-
-def comp_param_stat(models: List, layer_width=30):
-    """
-    nn.Moduleのリストを受け取り、各モデルの層ごとのパラメータ統計（平均と標準偏差）を
-    シンプルなテーブル形式で表示する。
-
-    Args:
-        models (List[nn.Module]): 統計を比較したいPyTorchモデルのリスト。
-    """
-    if not models:
-        print("No models provided.")
-        return
-
-    all_stats_data = []
-    network_names = []
-
-    # 1. 各モデルの統計データを計算して収集する
-    for model in models:
-        # Networkクラスでラップする
-        net = Network(model)
-        network_names.append(model.__class__.__name__)
+    def history(self) -> str:
+        step_strs = []
+        for step in self._steps:
+            args = ", ".join(
+                [str(a) for a in step['args']] + 
+                [f"{k}={v}" for k, v in step['kwargs'].items()]
+            )
+            step_strs.append(f"{step['func'].__name__}({args})")
         
-        # 層ごとの統計値を取得
-        means = net.param_stat_layer(stat_f=lambda p: p.mean().item())
-        vars = net.param_stat_layer(stat_f=lambda p: p.var().item())
-        
-        # (層名, 平均, 分散) のタプルのリストを作成
-        model_stats = []
-        for name in means.keys():
-            model_stats.append((name, means[name], vars[name]))
-        all_stats_data.append(model_stats)
+        base_name = getattr(self._seed_obj, '__name__', 'Base')
+        if not isinstance(base_name, str):
+            base_name = 'Base'
+            
+        return ".".join([base_name] + step_strs)
 
-    # 2. テーブル形式で出力する
-    
-    # 各列の幅を定義
-    L_WIDTH = layer_width  # Layer name
-    M_WIDTH = 10  # Mean
-    S_WIDTH = 10  # var
-    # (L_WIDTH + 1 + M_WIDTH + 1 + S_WIDTH)
-    COL_WIDTH = L_WIDTH + M_WIDTH + S_WIDTH + 2 
-    # 列間のセパレータ（スペース）
-    SEPARATOR = " " * 4 
+    def pipe(self, func: Callable, *args, **kwargs) -> 'LazyPipeline':
+        step_info = {'func': func, 'args': args, 'kwargs': kwargs}
+        return self.__class__(self._seed_obj, self._steps + [step_info])
 
-    # ヘッダーの作成
-    header_names_list = []
-    header_cols_list = []
-    separator_line_list = []
-    
-    for name in network_names:
-        header_names_list.append(f"Network: {name:<{COL_WIDTH - len('Network: ')}}")
-        header_cols_list.append(f"{'Layer':<{L_WIDTH}} {'Mean':>{M_WIDTH}} {'Var':>{S_WIDTH}}")
-        separator_line_list.append("-" * COL_WIDTH)
-
-    print(SEPARATOR.join(header_names_list))
-    print(SEPARATOR.join(separator_line_list))
-    print(SEPARATOR.join(header_cols_list))
-    print(SEPARATOR.join(separator_line_list))
-
-
-    # データ行の作成
-    # 層の数が異なるモデルに対応するため itertools.zip_longest を使用
-    filler = (None, None, None) # 空の層を埋めるためのプレースホルダ
-    for row_data in itertools.zip_longest(*all_stats_data, fillvalue=filler):
-        row_str_list = []
-        for name, mean, var in row_data:
-            if name is not None:
-                part = f"{name:<{L_WIDTH}} {mean:>{M_WIDTH}.6f} {var:>{S_WIDTH}.6f}"
-            else:
-                part = " " * (COL_WIDTH) # 層がない場合は空白で埋める
-            row_str_list.append(part)
-        
-        print(SEPARATOR.join(row_str_list))
-    
-    print(SEPARATOR.join(separator_line_list))
-
+    def _execute(self, target_obj: Any) -> Any:
+        current_obj = target_obj
+        for step in self._steps:
+            new_result = step['func'](current_obj, *step['args'], **step['kwargs'])
+            if new_result is not None:
+                current_obj = new_result
+        return current_obj

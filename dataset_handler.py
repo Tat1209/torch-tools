@@ -1,14 +1,13 @@
-import itertools
 import random
-# 'replace' を dataclasses からインポート
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import v2 as transforms
+
 
 @dataclass(frozen=True)
 class DatasetState:

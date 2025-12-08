@@ -148,23 +148,6 @@ class RunManager:
                 df_nonest = self.df_metrics.pipe(self._resolve_nested)
                 df_nonest.write_csv(self.fpath(self.metrics_csv))
 
-    # def ref_stats(self, step=None, itv=None, last_step=None):
-    #     if interval(step=step, itv=itv, last_step=last_step):
-    #         if self.df_params is not None:
-    #             try:
-    #                 self.df_params.write_parquet(self.fpath(self.params_pq))
-    #                 df_nonest = self.df_params.pipe(self._resolve_nested)
-    #                 df_nonest.write_csv(self.fpath(self.params_csv))
-    #             except Exception as e:
-    #                 print(f"Failed to write params parquet at {self.fpath(self.params_pq)}")
-    #         if self.df_metrics is not None:
-    #             try:
-    #                 self.df_metrics.write_parquet(self.fpath(self.metrics_pq))
-    #                 df_nonest = self.df_metrics.pipe(self._resolve_nested)
-    #                 df_nonest.write_csv(self.fpath(self.metrics_csv))
-    #             except Exception as e:
-    #                 print(f"Failed to write metrics parquet at {self.fpath(self.metrics_pq)}")
-
     def fetch_files(self, fname):
         dir_names = list(self.runs_path.iterdir())
         run_ids = [dir_name.name for dir_name in dir_names]

@@ -14,114 +14,75 @@ import pynvml
 
 
 def get_device(
-    avoid_used: bool = False, 
-    util_th: int = 10,
-    avoid_locked: bool = False,
-    lock_path: Path = Path("~/.gpu_locks"), 
-    lock: bool = False, 
-) -> torch.device | tuple[torch.device | None, IO | None] | None:
+    avoid_used: bool,
+    util_th: int,
+    free_mem_th: float,
+    avoid_locked: bool = True,
+    lock_path: Path = Path("~/.gpu_locks"),
+    lock: bool = True
+) -> tuple[Any, IO] | tuple[None, None]:
     """
-    使用可能なdeviceを探索して返す.
-
     Args:
-        avoid_used (bool): TrueならGPU使用率(Util)を見て空きを探す.
-        util_th (int): avoid_used=True時のGPU使用率の閾値(%).
-        avoid_locked (bool): TrueならロックされているGPUを避ける.
-        lock_path (Path): ロックファイルの保存先ディレクトリ. デフォルトはホームディレクトリ下.
-        lock (bool): Trueならロックファイルを作成・維持して (device, handle) を返す.
+        avoid_used (bool): Trueの場合，GPUの使用率と空きメモリ容量を監視して空きGPUを探す．
+        util_th (int): 許容するGPU使用率の上限(%)．これ以下の使用率のGPUを選択する．
+        free_mem_th (float): 必要とする空きメモリの下限(MiB)．これ以上の空きがあるGPUを選択する．
+        avoid_locked (bool): Trueの場合，ロックファイルが存在するGPUをスキップする．
+        lock_path (Path): 排他制御用のロックファイルを保存するディレクトリ．
+        lock (bool): Trueの場合，選択したGPUに対してファイルロックを取得して返す．
 
     Returns:
         lock=False: torch.device or None
         lock=True:  (torch.device, IO) or (None, None)
     """
-    
-    if not torch.cuda.is_available():
-        warnings.warn("\n[Warning] CUDA is not available. Returning 'cpu'.\n", RuntimeWarning)
-        device = torch.device("cpu")
-        return (device, None) if lock else device
+    lock_path = lock_path.expanduser()
+    lock_path.mkdir(parents=True, exist_ok=True)
 
-    pynvml.nvmlInit()
-    
     try:
-        # チルダ(~)を展開してから絶対パスへ変換
-        lock_path = Path(lock_path).expanduser().resolve()
+        pynvml.nvmlInit()
+        count = pynvml.nvmlDeviceGetCount()
         
-        if lock:
-            try:
-                lock_path.mkdir(parents=True, exist_ok=True)
-                # 念のため権限を広げるが、ホームディレクトリ下なら所有者は自分なので通常エラーにならない
-                os.chmod(lock_path, 0o777)
-            except OSError:
-                pass
-
-        for i in range(torch.cuda.device_count()):
-            lock_file = lock_path / f"gpu_{i}.lock"
-            f: IO | None = None
+        for i in range(count):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
             
-            # 1. Lock Check
-            if avoid_locked:
-                try:
-                    if lock:
-                        f = open(lock_file, "a+")
-                    elif lock_file.exists():
-                        f = open(lock_file, "r")
-                    
-                    if f:
-                        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except (OSError, IOError):
-                    if f:
-                        f.close()
-                    continue
-
-            # 2. Usage Check
             if avoid_used:
-                try:
-                    props = torch.cuda.get_device_properties(i)
-                    uuid_str = str(props.uuid)
-                    if not uuid_str.startswith("GPU-"):
-                        uuid_str = f"GPU-{uuid_str}"
-                    h = pynvml.nvmlDeviceGetHandleByUUID(uuid_str.encode("utf-8"))
-                    if pynvml.nvmlDeviceGetUtilizationRates(h).gpu > util_th:
-                        if f:
-                            fcntl.flock(f, fcntl.LOCK_UN)
-                            f.close()
-                        continue
-                except pynvml.NVMLError as e:
-                    warnings.warn(f"NVML check failed for GPU {i}: {e}", RuntimeWarning)
-                    if f:
-                        fcntl.flock(f, fcntl.LOCK_UN)
-                        f.close()
-                    continue
-                except Exception as e:
-                    warnings.warn(f"GPU {i} check failed: {e}", RuntimeWarning)
-                    if f:
-                        fcntl.flock(f, fcntl.LOCK_UN)
-                        f.close()
+                util = pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
+                free_mem = pynvml.nvmlDeviceGetMemoryInfo(handle).free / (1024 ** 2)
+
+                if util > util_th or free_mem < free_mem_th:
                     continue
 
-            # 3. Finalize
-            device = torch.device(f"cuda:{i}")
+            lock_file = lock_path / f"gpu_{i}.lock"
+            
+            if avoid_locked and lock_file.exists():
+                try:
+                    with open(lock_file, "w") as f:
+                        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        fcntl.flock(f, fcntl.LOCK_UN)
+                except OSError:
+                    continue
 
             if lock:
-                if f is None: 
-                    try:
-                        f = open(lock_file, "a+")
-                        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    except (OSError, IOError):
-                        if f:
-                            f.close()
-                        continue
-                return (device, f)
-            else:
-                if f:
-                    fcntl.flock(f, fcntl.LOCK_UN)
+                try:
+                    f = open(lock_file, "w")
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    Device = type("Device", (object,), {"index": i})
+                    return Device(), f
+                except OSError:
                     f.close()
-                return device
+                    continue
+            else:
+                Device = type("Device", (object,), {"index": i})
+                return Device(), None
 
+    except pynvml.NVMLError:
+        return None, None
     finally:
-        pynvml.nvmlShutdown()
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
 
-    return (None, None) if lock else None
+    return None, None
 
 def generate_task_grid(config: dict[str | tuple[str, ...], Any]) -> list[dict[str, Any]]:
     """
@@ -223,39 +184,37 @@ def parallel_run(
     check_interval: float = 1.0,
     avoid_used: bool = False,
     util_th: int = 10,
+    free_mem_th: float = 2000.0,
     lock_path: Path = Path("~/.gpu_locks"),
 ):
     """
     GPUリソースを管理しながらタスクを並列実行するスケジューラ.
 
     Args:
-        task_func: 実行する関数 exp(cfg).
-        config: 設定辞書. リストの値はSweep対象となる.
-        max_tasks: 同時実行タスク数の上限.
-        check_interval: ポーリング間隔(秒).
-        avoid_used (bool): TrueならGPU使用率を見て空きを探す.
-        util_th (int): GPU使用率の閾値(%).
-        lock_path (Path): ロックファイルの保存先. デフォルトはホームディレクトリ下.
+        task_func (Callable): 各タスクを実行する関数．引数として設定辞書を受け取る．
+        config (dict): 実験設定を含む辞書．リスト型の値はグリッドサーチ（Sweep）の対象として展開される．
+        max_tasks (int | None): 同時に実行するプロセスの最大数．Noneの場合は制限なし．
+        check_interval (float): 空きGPUを探すポーリング間隔（秒）．
+        avoid_used (bool): Trueの場合，GPUの負荷状況（使用率・メモリ）を考慮して割り当てを行う．
+        util_th (int): 割り当て対象とするGPU使用率の上限(%)．
+        free_mem_th (float): 割り当てに必要とするGPU空きメモリの下限(MiB)．
+        lock_path (Path): GPUの排他制御用ロックファイルを保存するパス．
     """
-    
     tasks = generate_task_grid(config)
     print(f"[Scheduler] Total tasks: {len(tasks)}")
     
-    # { process_object: lock_file_handle }
     running_procs: dict[multiprocessing.Process, IO] = {}
 
     try:
         while tasks or running_procs:
-            # 1. Cleanup
             _cleanup_finished_processes(running_procs)
 
-            # 2. Spawn
             if tasks and (max_tasks is None or len(running_procs) < max_tasks):
-                # ロック確保 (multirunは排他制御必須のため lock=True, avoid_locked=True で固定)
                 res = get_device(
                     avoid_used=avoid_used,
                     util_th=util_th,
-                    avoid_locked=True, # ロック前提なのでTrueで効率化
+                    free_mem_th=free_mem_th,
+                    avoid_locked=True,
                     lock_path=lock_path,
                     lock=True
                 )
@@ -265,11 +224,10 @@ def parallel_run(
                     gpu_id = device.index
                     
                     next_cfg = tasks.pop(0)
-                    
                     p = _spawn_worker(task_func, next_cfg, gpu_id)
                     running_procs[p] = lock_handle
                     
-                    print(f"[Scheduler] Assigned task to GPU {gpu_id}. (Running: {len(running_procs)}, Remaining: {len(tasks)})")
+                    print(f"[Scheduler] Assigned GPU {gpu_id}. (Running: {len(running_procs)}, Rem: {len(tasks)})")
                 else:
                     time.sleep(check_interval)
             else:
@@ -279,17 +237,16 @@ def parallel_run(
         print("[Scheduler] All tasks completed.")
 
     except KeyboardInterrupt:
-        print("\n[Scheduler] KeyboardInterrupt received. Terminating workers...")
+        print("\n[Scheduler] Terminating...")
         for p in list(running_procs.keys()):
             if p.is_alive():
-                p.terminate() # 強制終了
+                p.terminate()
                 p.join()
-                # ロック解放
-                lock_handle = running_procs[p]
-                if lock_handle:
+                lh = running_procs[p]
+                if lh:
                     try:
-                        fcntl.flock(lock_handle, fcntl.LOCK_UN)
-                        lock_handle.close()
+                        fcntl.flock(lh, fcntl.LOCK_UN)
+                        lh.close()
                     except Exception:
                         pass
         print("[Scheduler] Shutdown complete.")

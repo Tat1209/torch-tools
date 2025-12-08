@@ -148,6 +148,23 @@ class RunManager:
                 df_nonest = self.df_metrics.pipe(self._resolve_nested)
                 df_nonest.write_csv(self.fpath(self.metrics_csv))
 
+    # def ref_stats(self, step=None, itv=None, last_step=None):
+    #     if interval(step=step, itv=itv, last_step=last_step):
+    #         if self.df_params is not None:
+    #             try:
+    #                 self.df_params.write_parquet(self.fpath(self.params_pq))
+    #                 df_nonest = self.df_params.pipe(self._resolve_nested)
+    #                 df_nonest.write_csv(self.fpath(self.params_csv))
+    #             except Exception as e:
+    #                 print(f"Failed to write params parquet at {self.fpath(self.params_pq)}")
+    #         if self.df_metrics is not None:
+    #             try:
+    #                 self.df_metrics.write_parquet(self.fpath(self.metrics_pq))
+    #                 df_nonest = self.df_metrics.pipe(self._resolve_nested)
+    #                 df_nonest.write_csv(self.fpath(self.metrics_csv))
+    #             except Exception as e:
+    #                 print(f"Failed to write metrics parquet at {self.fpath(self.metrics_pq)}")
+
     def fetch_files(self, fname):
         dir_names = list(self.runs_path.iterdir())
         run_ids = [dir_name.name for dir_name in dir_names]
@@ -165,23 +182,38 @@ class RunManager:
             stats_l = []
             for run_id, params_path, metrics_path in zip(run_ids, params_paths, metrics_paths):
                 df_run = pl.DataFrame({"run_id": run_id})
-                if params_path.exists():
-                    df_params = pl.read_parquet(params_path)
+                if params_path.exists() and params_path.stat().st_size > 12:
+                    try:
+                        df_params = pl.read_parquet(params_path)
+                    except Exception as e:
+                        print(f"Failed to read params parquet for run_id {run_id}")
+                        continue
                     df_run = df_run.hstack(df_params)
-                if metrics_path.exists():
-                    df_metrics = pl.read_parquet(metrics_path)
+                if metrics_path.exists() and metrics_path.stat().st_size > 12:
+                    try:
+                        df_metrics = pl.read_parquet(metrics_path)
+                    except Exception as e:
+                        print(f"Failed to read metrics parquet for run_id {run_id}")
+                        continue
                     df_metrics = df_metrics.select(pl.all().implode())
                     df_run = df_run.hstack(df_metrics)
                 stats_l.append(df_run)
                 
             df = pl.concat(stats_l, how="diagonal_relaxed").sort(pl.col("run_id"))
             if refresh:
-                df.write_parquet(self.exp_path / Path(fname))
-                df_nonest = df.pipe(self._resolve_nested)
-                df_nonest.write_csv(self.exp_path / Path(self.results_csv))
-                return df
+                try:
+                    df.write_parquet(self.exp_path / Path(fname))
+                    df_nonest = df.pipe(self._resolve_nested)
+                    df_nonest.write_csv(self.exp_path / Path(self.results_csv))
+                    return df
+                except Exception as e:
+                    print(f"Failed to write results parquet at {self.exp_path / Path(fname)}")
             else:
-                pl.read_parquet(self.exp_path / Path(fname))
+                if (self.exp_path / Path(fname)).stat().st_size > 12:
+                    try:
+                        pl.read_parquet(self.exp_path / Path(fname))
+                    except Exception as e:
+                        print(f"Failed to read results parquet at {self.exp_path / Path(fname)}")
                 return df
 
 # これにはrun_idつくるのが妥当? めんどいけど

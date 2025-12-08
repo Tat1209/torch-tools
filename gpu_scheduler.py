@@ -123,25 +123,57 @@ def get_device(
 
     return (None, None) if lock else None
 
-def generate_task_grid(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """設定辞書から直積タスクリストを生成する"""
+def generate_task_grid(config: dict[str | tuple[str, ...], Any]) -> list[dict[str, Any]]:
+    """
+    設定辞書からタスクリストを生成する。
+    リストの値は直積(Grid)の対象となるが、タプルキーを用いることで特定の要素をZip(同期)できる。
+
+    Usage:
+        config = {
+            # --- Zip (Linked parameters) ---
+            # キーをタプルにし、値をタプル(またはリスト)のリストにすると同期して変動する
+            ("model", "lr"): [("resnet", 1e-3), ("vit", 1e-4)],
+
+            # --- Grid (Cartesian product) ---
+            # 通常の文字列キーは他の要素と直積をとる
+            "batch_size": [32, 64],
+
+            # --- Fixed ---
+            # リストでない値は固定される
+            "epochs": 10
+        }
+        tasks = generate_task_grid(config)
+        # Result: 2 (model/lr) * 2 (batch_size) = 4 configs
+    """
+    sweep_items = []
     fixed = {}
-    sweep = {}
+
     for k, v in config.items():
         if isinstance(v, list):
-            sweep[k] = v
+            sweep_items.append((k, v))
         else:
             fixed[k] = v
 
-    if not sweep:
+    if not sweep_items:
         return [deepcopy(fixed)]
 
-    keys, values = zip(*sweep.items())
+    keys, values_list = zip(*sweep_items)
     tasks = []
-    for combo in itertools.product(*values):
+
+    for combo in itertools.product(*values_list):
         new_cfg = deepcopy(fixed)
-        new_cfg.update(dict(zip(keys, combo)))
+        
+        for key_def, val in zip(keys, combo):
+            if isinstance(key_def, tuple):
+                # Zip展開: タプルキー ("a", "b") -> 値 (1, 2) をそれぞれ代入
+                for sub_k, sub_v in zip(key_def, val):
+                    new_cfg[sub_k] = sub_v
+            else:
+                # Grid展開: 通常キー "a" -> 値 1 を代入
+                new_cfg[key_def] = val
+        
         tasks.append(new_cfg)
+
     return tasks
 
 def _worker_wrapper(task_func: Callable, cfg: dict, gpu_id: int):

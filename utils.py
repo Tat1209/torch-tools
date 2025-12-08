@@ -1,13 +1,12 @@
-import fcntl
+import os
 import functools
 import inspect
 import math
 import random
 import time
-import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Any, Callable, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
 
 import numpy as np
 
@@ -154,7 +153,55 @@ def is_reached(*args, tag="tmp") -> bool:
     else:
         tag_state['skip_count'] += 1
         return False
+    
+def get_resource_config(max_process: int = 1, reserve_threads: int = 0) -> dict:
+    """
+    システムのCPUコア数を取得し、指定された同時実行プロセス数で分割した
+    最適なスレッド数・ワーカー数設定を辞書で返します。
 
+    Args:
+        max_process (int): 同時に実行するプロセス数（デフォルト: 1）。
+        reserve_threads (int): システム全体として残しておく予備スレッド数（デフォルト: 0）。
+
+    Returns:
+        dict: 各プロセスに割り当てるべき設定値。
+            - 'num_threads': (int) Intra-op並列数
+            - 'num_interop_threads': (int) Inter-op並列数
+            - 'num_workers': (int) DataLoaderのワーカー数
+    """
+    if max_process < 1:
+        raise ValueError("max_process must be at least 1.")
+
+    # 1. 利用可能な全CPUコア数の取得 (コンテナ対応)
+    try:
+        available_cores = len(os.sched_getaffinity(0))
+    except AttributeError:
+        available_cores = os.cpu_count() or 1
+
+    # 2. 予備スレッドの確保
+    # システム全体で reserve_threads を引いた残りを計算
+    allocatable_cores = max(1, available_cores - reserve_threads)
+
+    # 3. プロセスごとの割り当て計算
+    # 利用可能なコア数をプロセス数で割り、切り捨て(floor)を行うことで
+    # 合計が物理リソースを超えないようにする。
+    cores_per_process = math.floor(allocatable_cores / max_process)
+
+    # 少なくとも1スレッドは確保する
+    cores_per_process = max(1, cores_per_process)
+
+    # 4. 辞書の作成
+    # num_workers について:
+    # PyTorchのDataLoaderはメインプロセスとは別にプロセスを立ち上げます。
+    # ここでは「その学習プロセスに割り当てられたCPU枠」を上限として設定します。
+    config = {
+        "num_threads": cores_per_process,
+        "num_interop_threads": cores_per_process,
+        "num_workers": cores_per_process
+    }
+
+    return config
+    
 class TimeLog:
     """
     説明:

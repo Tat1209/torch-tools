@@ -64,10 +64,10 @@ class DatasetHandler(Dataset):
     def __len__(self):
         return len(self.state.indices)
 
-    def loader(self, batch_size=128, shuffle=True, num_workers=2, pin_memory=True, **kwargs):
+    def loader(self, batch_size=128, shuffle=True, num_workers=2, pin_memory=True, persistent_workers=True, **kwargs):
         if len(self) == 0:
             return None
-        return DataLoader(self, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, **kwargs)
+        return DataLoader(self, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, persistent_workers=persistent_workers, **kwargs)
 
     def transform(self, transform_l, replace_flag=False):
         new_transform_l = transform_l if replace_flag else self.state.transform_l + transform_l

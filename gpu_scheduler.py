@@ -4,14 +4,10 @@ import fcntl
 import itertools
 import multiprocessing
 import traceback
-import warnings
-from copy import deepcopy
-from pathlib import Path
-from typing import Callable, Any, IO
-
-import torch
 import pynvml
-
+from typing import Any, IO, Callable
+from pathlib import Path
+from copy import deepcopy
 
 def get_device(
     avoid_used: bool,
@@ -19,7 +15,8 @@ def get_device(
     free_mem_th: float,
     avoid_locked: bool = True,
     lock_path: Path = Path("~/.gpu_locks"),
-    lock: bool = True
+    lock: bool = True,
+    gpu_ids: list[int] | None = None
 ) -> tuple[Any, IO] | tuple[None, None]:
     """
     Args:
@@ -29,6 +26,7 @@ def get_device(
         avoid_locked (bool): Trueの場合，ロックファイルが存在するGPUをスキップする．
         lock_path (Path): 排他制御用のロックファイルを保存するディレクトリ．
         lock (bool): Trueの場合，選択したGPUに対してファイルロックを取得して返す．
+        gpu_ids (list[int] | None): 使用を許可するGPU IDのリスト．Noneの場合は全GPUを対象とする．
 
     Returns:
         lock=False: torch.device or None
@@ -39,10 +37,18 @@ def get_device(
 
     try:
         pynvml.nvmlInit()
-        count = pynvml.nvmlDeviceGetCount()
         
-        for i in range(count):
-            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+        if gpu_ids is not None:
+            candidates = gpu_ids
+        else:
+            candidates = range(pynvml.nvmlDeviceGetCount())
+        
+        for i in candidates:
+            # 指定されたIDが存在しない場合はスキップ(エラー回避)
+            try:
+                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+            except pynvml.NVMLError:
+                continue
             
             if avoid_used:
                 util = pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
@@ -186,6 +192,7 @@ def parallel_run(
     util_th: int = 10,
     free_mem_th: float = 2000.0,
     lock_path: Path = Path("~/.gpu_locks"),
+    gpu_ids: list[int] | None = None
 ):
     """
     GPUリソースを管理しながらタスクを並列実行するスケジューラ.
@@ -199,6 +206,7 @@ def parallel_run(
         util_th (int): 割り当て対象とするGPU使用率の上限(%)．
         free_mem_th (float): 割り当てに必要とするGPU空きメモリの下限(MiB)．
         lock_path (Path): GPUの排他制御用ロックファイルを保存するパス．
+        gpu_ids (list[int] | None): 使用を許可するGPU IDのリスト．Noneの場合は全GPUを使用候補とする．
     """
     tasks = generate_task_grid(config)
     print(f"[Scheduler] Total tasks: {len(tasks)}")
@@ -216,7 +224,8 @@ def parallel_run(
                     free_mem_th=free_mem_th,
                     avoid_locked=True,
                     lock_path=lock_path,
-                    lock=True
+                    lock=True,
+                    gpu_ids=gpu_ids
                 )
                 
                 if res and res[0] is not None:

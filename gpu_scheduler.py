@@ -5,9 +5,79 @@ import itertools
 import multiprocessing
 import traceback
 import pynvml
-from typing import Any, IO, Callable
+import logging
+from typing import Any, IO, Callable, Iterator
 from pathlib import Path
 from copy import deepcopy
+from dataclasses import dataclass
+from queue import Empty
+
+# --- Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
+
+# --- Data Structures ---
+@dataclass
+class TaskResult:
+    """
+    タスクの実行結果を保持するデータクラス
+    """
+    success: bool
+    gpu_id: int
+    config: Any
+    error_msg: str | None = None
+    elapsed_time: float = 0.0
+
+def generate_tasks_grid(task_func: Callable, config: dict[str | tuple[str, ...], Any]) -> list[tuple[Callable, dict[str, Any]]]:
+    """
+    設定辞書から直積（Grid Search）または同期（Zip）させたタスクリストを生成します。
+
+    Args:
+        task_func (Callable): 実行する関数。
+        config (dict): パラメータ辞書。キーをタプルにすると値のリストがZip同期されます。
+
+    Returns:
+        list[tuple[Callable, dict]]: (関数, 設定辞書) のタプルリスト。
+
+    Example:
+        >>> def train(args): print(args)
+        >>> conf = {
+        ...     "bs": [16, 32],                       # Grid: 2通り
+        ...     ("model", "lr"): [("A", 0.1), ("B", 0.01)] # Zip: 2通り
+        ... }
+        >>> tasks = generate_tasks_grid(train, conf)
+        >>> # Result: 4 tasks
+    """
+    sweep_items = []
+    fixed = {}
+
+    for k, v in config.items():
+        if isinstance(v, list):
+            sweep_items.append((k, v))
+        else:
+            fixed[k] = v
+
+    if not sweep_items:
+        return [(task_func, deepcopy(fixed))]
+
+    keys, values_list = zip(*sweep_items)
+    tasks = []
+
+    for combo in itertools.product(*values_list):
+        new_cfg = deepcopy(fixed)
+        for key_def, val in zip(keys, combo):
+            if isinstance(key_def, tuple):
+                for sub_k, sub_v in zip(key_def, val):
+                    new_cfg[sub_k] = sub_v
+            else:
+                new_cfg[key_def] = val
+        tasks.append((task_func, new_cfg))
+
+    return tasks
 
 def get_device(
     avoid_used: bool,
@@ -19,18 +89,19 @@ def get_device(
     gpu_ids: list[int] | None = None
 ) -> tuple[Any, IO] | tuple[None, None]:
     """
+    空いているGPUを探し、ファイルロックを取得して返します。
+
     Args:
-        avoid_used (bool): Trueの場合，GPUの使用率と空きメモリ容量を監視して空きGPUを探す．
-        util_th (int): 許容するGPU使用率の上限(%)．これ以下の使用率のGPUを選択する．
-        free_mem_th (float): 必要とする空きメモリの下限(MiB)．これ以上の空きがあるGPUを選択する．
-        avoid_locked (bool): Trueの場合，ロックファイルが存在するGPUをスキップする．
-        lock_path (Path): 排他制御用のロックファイルを保存するディレクトリ．
-        lock (bool): Trueの場合，選択したGPUに対してファイルロックを取得して返す．
-        gpu_ids (list[int] | None): 使用を許可するGPU IDのリスト．Noneの場合は全GPUを対象とする．
+        avoid_used (bool): TrueならGPU使用率・メモリも監視する。
+        util_th (int): 使用率閾値(%)。これ以下なら選択。
+        free_mem_th (float): 空きメモリ閾値(MiB)。これ以上なら選択。
+        avoid_locked (bool): TrueならロックファイルがあるGPUを避ける。
+        lock_path (Path): ロックファイルの保存先。
+        lock (bool): Trueならロックを取得して返す。
+        gpu_ids (list[int]): 使用許可するGPU IDリスト。
 
     Returns:
-        lock=False: torch.device or None
-        lock=True:  (torch.device, IO) or (None, None)
+        tuple: (Deviceオブジェクト, ロックファイルオブジェクト) または (None, None)
     """
     lock_path = lock_path.expanduser()
     lock_path.mkdir(parents=True, exist_ok=True)
@@ -44,7 +115,6 @@ def get_device(
             candidates = range(pynvml.nvmlDeviceGetCount())
         
         for i in candidates:
-            # 指定されたIDが存在しない場合はスキップ(エラー回避)
             try:
                 handle = pynvml.nvmlDeviceGetHandleByIndex(i)
             except pynvml.NVMLError:
@@ -90,86 +160,64 @@ def get_device(
 
     return None, None
 
-def generate_task_grid(config: dict[str | tuple[str, ...], Any]) -> list[dict[str, Any]]:
+def _worker_wrapper(
+    task_func: Callable, 
+    args: Any, 
+    gpu_id: int, 
+    result_queue: multiprocessing.Queue
+):
     """
-    設定辞書からタスクリストを生成する。
-    リストの値は直積(Grid)の対象となるが、タプルキーを用いることで特定の要素をZip(同期)できる。
-
-    Usage:
-        config = {
-            # --- Zip (Linked parameters) ---
-            # キーをタプルにし、値をタプル(またはリスト)のリストにすると同期して変動する
-            ("model", "lr"): [("resnet", 1e-3), ("vit", 1e-4)],
-
-            # --- Grid (Cartesian product) ---
-            # 通常の文字列キーは他の要素と直積をとる
-            "batch_size": [32, 64],
-
-            # --- Fixed ---
-            # リストでない値は固定される
-            "epochs": 10
-        }
-        tasks = generate_task_grid(config)
-        # Result: 2 (model/lr) * 2 (batch_size) = 4 configs
+    [内部関数] ワーカープロセス内でタスクを実行し、結果を送信する。
     """
-    sweep_items = []
-    fixed = {}
-
-    for k, v in config.items():
-        if isinstance(v, list):
-            sweep_items.append((k, v))
-        else:
-            fixed[k] = v
-
-    if not sweep_items:
-        return [deepcopy(fixed)]
-
-    keys, values_list = zip(*sweep_items)
-    tasks = []
-
-    for combo in itertools.product(*values_list):
-        new_cfg = deepcopy(fixed)
-        
-        for key_def, val in zip(keys, combo):
-            if isinstance(key_def, tuple):
-                # Zip展開: タプルキー ("a", "b") -> 値 (1, 2) をそれぞれ代入
-                for sub_k, sub_v in zip(key_def, val):
-                    new_cfg[sub_k] = sub_v
-            else:
-                # Grid展開: 通常キー "a" -> 値 1 を代入
-                new_cfg[key_def] = val
-        
-        tasks.append(new_cfg)
-
-    return tasks
-
-def _worker_wrapper(task_func: Callable, cfg: dict, gpu_id: int):
-    """[内部用] 環境変数をセットしてタスクを実行するラッパー"""
     if gpu_id is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     
     p_name = multiprocessing.current_process().name
-    try:
-        print(f"[{p_name}] Start Task on GPU {gpu_id}")
-        task_func(cfg)
-        print(f"[{p_name}] Done Task on GPU {gpu_id}")
-    except Exception:
-        print(f"[Error] Task failed on GPU {gpu_id}")
-        traceback.print_exc()
+    start_time = time.time()
+    success = False
+    error_msg = None
 
-def _spawn_worker(task_func: Callable, cfg: dict, gpu_id: int) -> multiprocessing.Process:
-    """[ヘルパー] ワーカープロセスの生成と起動"""
-    ctx = multiprocessing.get_context('spawn')
+    try:
+        logger.info(f"[{p_name}] Start Task on GPU {gpu_id}")
+        task_func(args)
+        success = True
+        logger.info(f"[{p_name}] Done Task on GPU {gpu_id}")
+    except Exception:
+        error_msg = traceback.format_exc()
+        logger.error(f"[{p_name}] Task failed on GPU {gpu_id}\n{error_msg}")
+    finally:
+        elapsed = time.time() - start_time
+        result = TaskResult(
+            success=success,
+            gpu_id=gpu_id,
+            config=args,
+            error_msg=error_msg,
+            elapsed_time=elapsed
+        )
+        result_queue.put(result)
+
+def _spawn_worker(
+    ctx: multiprocessing.context.BaseContext,
+    task_func: Callable, 
+    args: Any, 
+    gpu_id: int, 
+    result_queue: multiprocessing.Queue
+) -> multiprocessing.Process:
+    """
+    [内部関数] 指定されたコンテキスト(spawn)でワーカープロセスを起動する。
+    """
     p = ctx.Process(
         target=_worker_wrapper, 
-        args=(task_func, cfg, gpu_id),
+        args=(task_func, args, gpu_id, result_queue),
         name=f"Worker-GPU{gpu_id}"
     )
     p.start()
     return p
 
 def _cleanup_finished_processes(running_procs: dict[multiprocessing.Process, IO]):
-    """[ヘルパー] 終了したプロセスのロック解放とリスト削除"""
+    """
+    [内部関数] 終了したプロセスを整理し、ロックを解放する。
+    """
     for p in list(running_procs.keys()):
         if not p.is_alive():
             p.join()
@@ -179,74 +227,88 @@ def _cleanup_finished_processes(running_procs: dict[multiprocessing.Process, IO]
                     fcntl.flock(lock_handle, fcntl.LOCK_UN)
                     lock_handle.close()
                 except IOError as e:
-                    print(f"[Warn] Failed to close lock: {e}")
+                    logger.warning(f"Failed to close lock: {e}")
             del running_procs[p]
 
-
 def parallel_run(
-    task_func: Callable[[dict[str, Any]], None],
-    config: dict[str, Any],
+    tasks: list[tuple[Callable, Any]] | Iterator[tuple[Callable, Any]],
     max_tasks: int | None = None,
-    check_interval: float = 1.0,
+    check_interval: float = 10.0,
     avoid_used: bool = False,
     util_th: int = 10,
     free_mem_th: float = 2000.0,
     lock_path: Path = Path("~/.gpu_locks"),
     gpu_ids: list[int] | None = None
-):
+) -> list[TaskResult]:
     """
-    GPUリソースを管理しながらタスクを並列実行するスケジューラ.
+    GPUリソースを管理しながらタスクを並列実行するスケジューラ。
 
     Args:
-        task_func (Callable): 各タスクを実行する関数．引数として設定辞書を受け取る．
-        config (dict): 実験設定を含む辞書．リスト型の値はグリッドサーチ（Sweep）の対象として展開される．
-        max_tasks (int | None): 同時に実行するプロセスの最大数．Noneの場合は制限なし．
-        check_interval (float): 空きGPUを探すポーリング間隔（秒）．
-        avoid_used (bool): Trueの場合，GPUの負荷状況（使用率・メモリ）を考慮して割り当てを行う．
-        util_th (int): 割り当て対象とするGPU使用率の上限(%)．
-        free_mem_th (float): 割り当てに必要とするGPU空きメモリの下限(MiB)．
-        lock_path (Path): GPUの排他制御用ロックファイルを保存するパス．
-        gpu_ids (list[int] | None): 使用を許可するGPU IDのリスト．Noneの場合は全GPUを使用候補とする．
+        tasks (list | Iterator): (関数, 引数) のタプルリスト。
+        max_tasks (int | None): 最大同時実行プロセス数。
+        check_interval (float): 空きGPU探索の間隔(秒)。
+        avoid_used (bool): GPU負荷(util/mem)監視を行うか。
+        util_th (int): 使用率上限(%)。
+        free_mem_th (float): 必要空きメモリ(MiB)。
+        lock_path (Path): ロックファイル保存パス。
+        gpu_ids (list[int]): 使用するGPU ID。
+
+    Returns:
+        list[TaskResult]: 全タスクの実行結果。
+
+    Example:
+        >>> tasks = generate_tasks_grid(my_func, config)
+        >>> results = parallel_run(tasks, max_tasks=4, gpu_ids=[0, 1, 2, 3])
     """
-    tasks = generate_task_grid(config)
-    print(f"[Scheduler] Total tasks: {len(tasks)}")
+    task_list = list(tasks)
+    total_tasks = len(task_list)
+    logger.info(f"[Scheduler] Total tasks scheduled: {total_tasks}")
     
     running_procs: dict[multiprocessing.Process, IO] = {}
+    
+    # 【重要】spawnコンテキストでQueueとProcessを生成する（SemLockエラー対策）
+    ctx = multiprocessing.get_context('spawn')
+    result_queue = ctx.Queue()
+    
+    results: list[TaskResult] = []
+    task_idx = 0
 
     try:
-        while tasks or running_procs:
+        while task_idx < total_tasks or running_procs:
             _cleanup_finished_processes(running_procs)
 
-            if tasks and (max_tasks is None or len(running_procs) < max_tasks):
+            while not result_queue.empty():
+                try:
+                    results.append(result_queue.get_nowait())
+                except Empty:
+                    break
+
+            if task_idx < total_tasks and (max_tasks is None or len(running_procs) < max_tasks):
                 res = get_device(
-                    avoid_used=avoid_used,
-                    util_th=util_th,
-                    free_mem_th=free_mem_th,
-                    avoid_locked=True,
-                    lock_path=lock_path,
-                    lock=True,
-                    gpu_ids=gpu_ids
+                    avoid_used=avoid_used, util_th=util_th, free_mem_th=free_mem_th,
+                    avoid_locked=True, lock_path=lock_path, lock=True, gpu_ids=gpu_ids
                 )
                 
                 if res and res[0] is not None:
                     device, lock_handle = res
                     gpu_id = device.index
                     
-                    next_cfg = tasks.pop(0)
-                    p = _spawn_worker(task_func, next_cfg, gpu_id)
+                    func, args = task_list[task_idx]
+                    p = _spawn_worker(ctx, func, args, gpu_id, result_queue)
                     running_procs[p] = lock_handle
                     
-                    print(f"[Scheduler] Assigned GPU {gpu_id}. (Running: {len(running_procs)}, Rem: {len(tasks)})")
+                    task_idx += 1
+                    logger.info(f"[Scheduler] Assigned GPU {gpu_id}. Progress: {task_idx}/{total_tasks} (Running: {len(running_procs)})")
                 else:
                     time.sleep(check_interval)
             else:
                 if running_procs:
                     time.sleep(check_interval)
 
-        print("[Scheduler] All tasks completed.")
+        logger.info("[Scheduler] All tasks completed.")
 
     except KeyboardInterrupt:
-        print("\n[Scheduler] Terminating...")
+        logger.warning("\n[Scheduler] Terminating...")
         for p in list(running_procs.keys()):
             if p.is_alive():
                 p.terminate()
@@ -258,4 +320,15 @@ def parallel_run(
                         lh.close()
                     except Exception:
                         pass
-        print("[Scheduler] Shutdown complete.")
+        logger.info("[Scheduler] Shutdown complete.")
+        return results
+
+    failed_tasks = [r for r in results if not r.success]
+    if failed_tasks:
+        logger.error(f"--- {len(failed_tasks)} Tasks Failed ---")
+        for f in failed_tasks:
+            logger.error(f"Config: {f.config}\nError: {f.error_msg}\n")
+    else:
+        logger.info("--- All Tasks Succeeded ---")
+
+    return results

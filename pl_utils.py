@@ -1,4 +1,6 @@
 import polars as pl
+from pathlib import Path
+from typing import Callable, Any
 
 def split_pm(df: pl.DataFrame) -> pl.DataFrame:
     metrics_columns = [name for name, dtype in df.schema.items() if isinstance(dtype, pl.List)]
@@ -92,6 +94,52 @@ def resolve_nested(df):
             df = df.with_columns([pl.lit("(nested_data)").alias(name)])
             
     return df
+
+def filter_finished_tasks(
+    tasks: list[tuple[Callable, dict[str, Any]]],
+    parquet_path: str | Path,
+    key_map: dict[str, str] | None = None
+) -> list[tuple[Callable, dict[str, Any]]]:
+    """
+    Parquetファイルを参照し、完了条件(epochs == epoch.list.last())を満たすタスクを除外します。
+    """
+    path = Path(parquet_path)
+    if not tasks or not path.exists():
+        return tasks
+
+    try:
+        df_finished = pl.read_parquet(path).filter(
+            pl.col("epochs") == pl.col("epoch").list.last()
+        )
+    except Exception:
+        return tasks
+
+    if df_finished.height == 0:
+        return tasks
+
+    task_configs = []
+    for i, (_, cfg) in enumerate(tasks):
+        row = cfg.copy()
+        row["__task_id"] = i
+        task_configs.append(row)
+    
+    df_tasks = pl.DataFrame(task_configs)
+
+    if key_map:
+        df_tasks = df_tasks.rename(key_map)
+
+    join_keys = [
+        col for col in df_tasks.columns 
+        if col in df_finished.columns and col != "__task_id"
+    ]
+    
+    if not join_keys:
+        return tasks
+
+    df_todo = df_tasks.join(df_finished, on=join_keys, how="anti")
+    remaining_ids = set(df_todo["__task_id"].to_list())
+    
+    return [t for i, t in enumerate(tasks) if i in remaining_ids]
     
 
 

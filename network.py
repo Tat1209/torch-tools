@@ -164,6 +164,41 @@ class Network(nn.Module):
     def repr_network(self):
         return repr(self.base_model)
 
+    def load_state_dict_flexible(self, state_dict, strict=True):
+        """
+        プレフィックスや階層構造の違いを吸収して state_dict をロードするメソッド。
+        
+        以下の順序でキーの適合を試みます:
+        1. 不要なプレフィックス(_orig_mod, module)の削除
+        2. そのままマッチするか確認
+        3. 'base_model.' を付与してマッチするか確認 (直のモデルをラップしたモデルにロードする場合)
+        4. 'base_model.' を削除してマッチするか確認 (ラップしたモデルを直のモデルにロードする場合)
+        """
+        own_keys = set(self.state_dict().keys())
+        
+        new_state_dict = {}
+        
+        for k, v in state_dict.items():
+            # torch.compileの '_orig_mod.', DataParallelの 'module.' を除去
+            k_clean = k.replace("_orig_mod.", "").replace("module.", "")
+            
+            if k_clean in own_keys:
+                # ケースA: クリーンなキーがそのまま一致する
+                new_state_dict[k_clean] = v
+                
+            elif f"base_model.{k_clean}" in own_keys:
+                # ケースB: 手元が 'base_model.xxx' で、ロード元が 'xxx' (base_model単体を保存していた場合)
+                new_state_dict[f"base_model.{k_clean}"] = v
+                
+            elif k_clean.startswith("base_model.") and k_clean.replace("base_model.", "") in own_keys:
+                # ケースC: 手元が 'xxx' で、ロード元が 'base_model.xxx' (逆のケース)
+                new_state_dict[k_clean.replace("base_model.", "")] = v
+                
+            else:
+                new_state_dict[k_clean] = v
+
+        return super().load_state_dict(new_state_dict, strict=strict)
+
 class Networks(list):
     def __init__(self, networks=None, agg_f=None):
         super().__init__(networks or [])

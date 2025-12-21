@@ -1,26 +1,48 @@
-import polars as pl
 from pathlib import Path
-from typing import Callable, Any
+from typing import Any, Callable
 
-def split_pm(df: pl.DataFrame) -> pl.DataFrame:
-    metrics_columns = [name for name, dtype in df.schema.items() if isinstance(dtype, pl.List)]
-    df_params = df.select(pl.exclude(metrics_columns))
-    df_metrics = df.select(metrics_columns)
-    df_metrics = df_metrics.explode(pl.all())
-    
-    return df_params, df_metrics
+import polars as pl
+import polars.selectors as cs
 
-def get_stats(df: pl.DataFrame) -> pl.DataFrame:
-    nested_columns = [name for name, dtype in zip(df.columns, df.dtypes) if isinstance(dtype, pl.List)]
-    df = df.with_columns([pl.col(name).list.last() for name in nested_columns])
-    # df_base = df_base.with_columns([pl.col(name).list.last().alias(f"{name}") for name in nested_columns])
-    
-    return df
 
-def get_stat(df: pl.DataFrame) -> pl.DataFrame:
-    df_params, df_metrics = df.pipe(split_pm)
-    df = df_params.join(df_metrics, how="cross")
+def split(df: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """params(1行)とmetrics(時系列)に分割"""
+    # リスト型（metrics）のカラムを特定
+    metrics_cols = cs.by_dtype(pl.List)
     
+    return df.drop(metrics_cols), df.select(metrics_cols).explode(pl.all())
+
+def flatten(df: pl.DataFrame) -> pl.DataFrame:
+    """時系列を展開してロング形式に変換 (旧: get_stat)"""
+    # 1行のparamsは自動的にコピーされ、metricsは展開される
+    return df.explode(cs.by_dtype(pl.List))
+
+def snapshot(df: pl.DataFrame) -> pl.DataFrame:
+    """最終値のみを抽出 (旧: get_stats)"""
+    # リストの最後の値を、元のカラム名で上書き
+    return df.with_columns(cs.by_dtype(pl.List).list.last())
+
+def format_nested(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    CSV出力用にネスト構造を文字列化（要約）します。
+    """
+    exprs = []
+    for name, dtype in df.schema.items():
+        if dtype.is_nested():
+            if isinstance(dtype, pl.List):
+                # List -> "last: value"
+                expr = (
+                    pl.lit("last: ") + 
+                    pl.col(name).list.last().cast(pl.String).fill_null("null")
+                ).alias(name)
+                exprs.append(expr)
+            else:
+                # Struct/Array -> "(nested_data)"
+                expr = pl.lit("(nested_data)").alias(name)
+                exprs.append(expr)
+    
+    if exprs:
+        return df.with_columns(exprs)
     return df
 
 def add_iter_step(df: pl.DataFrame,step_col="step", iter_ndata_col="iter_ndata", new_col_name="iter_step") -> pl.DataFrame:
@@ -83,16 +105,6 @@ def unnest_iter(df: pl.DataFrame, iter_epoch_col="iter_step") -> pl.DataFrame:
             pl.col(cols_to_unnest).list.eval(pl.element().explode())
         )
         
-    return df
-
-def resolve_nested(df):
-    nested_columns = [name for name, dtype in zip(df.columns, df.dtypes) if dtype.is_nested()]
-    for name in nested_columns:
-        try:
-            df = df.with_columns([(pl.lit("last: ") + pl.col(name).list.last().cast(pl.Utf8)).alias(name)])
-        except (pl.exceptions.InvalidOperationError, pl.exceptions.SchemaError):
-            df = df.with_columns([pl.lit("(nested_data)").alias(name)])
-            
     return df
 
 def filter_finished_tasks(

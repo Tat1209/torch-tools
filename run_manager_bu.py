@@ -6,31 +6,10 @@ import numpy as np
 import polars as pl
 
 from utils import interval
+from utils import format_time
 
 
-class PathManager:
-    def __init__(self, exec_path=None, exp_name="exp_default", exp_path=None):
-        # exp_pathを指定 -> 格納ディレクトリとexp_nameを同時に指定
-        if exec_path is None:
-            exp_path = Path(exp_path).resolve()
-            pa_path = exp_path.parent
-
-        # exec_path(__file__)とexp_nameを指定 -> コード実行ディレクトリと同じディレクトリに結果を格納
-        else:
-            pa_path = Path(exec_path).resolve().parent  # 常に__file__が送られてくるならresolveは不要
-            exp_path = pa_path / Path(exp_name)
-
-        self.pa_path = pa_path
-        self.exp_path = exp_path
-        self.runs_path = exp_path / Path("runs")
-        self.run_path = None
-        self.run_id = None
-
-    def fpath(self, fname):
-        return self.run_path / Path(fname)
-    
-
-class RunManager(PathManager):
+class RunManager:
     params_pq = "_params.parquet"
     metrics_pq = "_metrics.parquet"
     results_pq = "_results.parquet"
@@ -39,16 +18,24 @@ class RunManager(PathManager):
     metrics_csv = "_metrics.csv"
     results_csv = "_results.csv"
 
-    def __init__(self, exec_path=None, exp_name="exp_default", exp_path=None, run_id=None, exp_tpl="exp_tpl"):
+    def __init__(self, exc_path, exp_name="exp_default", exp_tpl="exp_tpl"):
         """
         ex.)
-            run = RunManager(exec_path=__file__, exp_name="exp_nyancat")
+            run = RunManager(exc_path=__file__, exp_name="exp_nyancat")
         """
-        super().__init__(exec_path, exp_name, exp_path)
+        self.exc_path = exc_path
+        self.exp_path = Path(exc_path).resolve().parent / exp_name
+        self.runs_path = self.exp_path / "runs"
+        run_id = f"run_{format_time(style=2)}"
+        run_path = self.runs_path / run_id
+
+        self.run_id = run_id
+        self.run_path = run_path
+        self.df_params = None
+        self.df_metrics = None
         
         if not self.exp_path.exists():
             self.exp_path.mkdir(parents=True, exist_ok=False)
-
             path_exp_def = Path(__file__).resolve().parent / "exp_tpls" / exp_tpl
             if path_exp_def.is_dir():
                 for item in path_exp_def.iterdir():
@@ -57,36 +44,19 @@ class RunManager(PathManager):
                         shutil.copytree(item, dest, dirs_exist_ok=True)
                     elif item.is_file():
                         shutil.copy2(item, dest)
-
         self.runs_path.mkdir(parents=True, exist_ok=True)
 
-        if run_id is None:
-            run_id = self._get_run_id(self.runs_path)
-        else:
-            self._inherit_stats()
+        # if run_id is None:
+        #     run_id = self._get_run_id(self.runs_path)
+        # else:
+        #     self._inherit_stats()
 
-        run_path = self.runs_path / str(run_id)
-        run_path.mkdir(parents=True, exist_ok=True)
+        self.run_path.mkdir(parents=True, exist_ok=True)
 
-        self.run_path = run_path
-        self.run_id = run_id
+
+    def fpath(self, fname):
+        return self.run_path / Path(fname)
         
-        self.df_params = None
-        self.df_metrics = None
-        
-    def exc_path(self, func, fname):
-        path = self.fpath(fname)
-        func(path)
-
-    def _get_run_id(self, runs_path):
-        dir_names = list(runs_path.iterdir())
-        dir_nums = [int(dir_name.name) for dir_name in dir_names]
-        if len(dir_nums) == 0:
-            run_id = 0
-        else:
-            run_id = max(dir_nums) + 1
-        return run_id
-
     def log_text(self, fname, text):
         with open(self.fpath(fname), "w") as fh:
             fh.write(text)
@@ -157,7 +127,7 @@ class RunManager(PathManager):
             self.df_params = pl.read_parquet(self.fpath(self.params_pq))
         if self.fpath(self.metrics_pq).exists():
             self.df_metrics = pl.read_parquet(self.fpath(self.metrics_pq))
-            
+
     def _resolve_nested(self, df):
         nested_columns = [name for name, dtype in zip(df.columns, df.dtypes) if dtype.is_nested()]
         for name in nested_columns:
@@ -165,27 +135,33 @@ class RunManager(PathManager):
                 df = df.with_columns([(pl.lit("last: ") + pl.col(name).list.last().cast(pl.Utf8)).alias(name)])
             except (pl.exceptions.InvalidOperationError, pl.exceptions.SchemaError):
                 df = df.with_columns([pl.lit("(nested_data)").alias(name)])
-                
         return df
-            
+    
     def ref_stats(self, step=None, itv=None, last_step=None):
         if interval(step=step, itv=itv, last_step=last_step):
             if self.df_params is not None:
-                self.df_params.write_parquet(self.fpath(self.params_pq))
-                df_nonest = self.df_params.pipe(self._resolve_nested)
-                df_nonest.write_csv(self.fpath(self.params_csv))
+                try:
+                    self.df_params.write_parquet(self.fpath(self.params_pq))
+                    df_nonest = self.df_params.pipe(self._resolve_nested)
+                    df_nonest.write_csv(self.fpath(self.params_csv))
+                except Exception as e:
+                    print(f"Failed to write params parquet at {self.fpath(self.params_pq)}")
             if self.df_metrics is not None:
-                self.df_metrics.write_parquet(self.fpath(self.metrics_pq))
-                df_nonest = self.df_metrics.pipe(self._resolve_nested)
-                df_nonest.write_csv(self.fpath(self.metrics_csv))
+                try:
+                    self.df_metrics.write_parquet(self.fpath(self.metrics_pq))
+                    df_nonest = self.df_metrics.pipe(self._resolve_nested)
+                    df_nonest.write_csv(self.fpath(self.metrics_csv))
+                except Exception as e:
+                    print(f"Failed to write metrics parquet at {self.fpath(self.metrics_pq)}")
+
 
     def fetch_files(self, fname):
         dir_names = list(self.runs_path.iterdir())
-        run_ids = [int(dir_name.name) for dir_name in dir_names]
+        run_ids = [dir_name.name for dir_name in dir_names]
         stats_paths = [dir_name / Path(fname) for dir_name in dir_names]
         
         return run_ids, stats_paths
-            
+
     def ref_results(self, step=None, itv=None, last_step=None, fname=None, refresh=True):
         if fname is None:
             fname = self.results_pq
@@ -196,25 +172,41 @@ class RunManager(PathManager):
             stats_l = []
             for run_id, params_path, metrics_path in zip(run_ids, params_paths, metrics_paths):
                 df_run = pl.DataFrame({"run_id": run_id})
-                if params_path.exists():
-                    df_params = pl.read_parquet(params_path)
+                if params_path.exists() and params_path.stat().st_size > 12:
+                    try:
+                        df_params = pl.read_parquet(params_path)
+                    except Exception as e:
+                        print(f"Failed to read params parquet for run_id {run_id}")
+                        continue
                     df_run = df_run.hstack(df_params)
-                if metrics_path.exists():
-                    df_metrics = pl.read_parquet(metrics_path)
+                if metrics_path.exists() and metrics_path.stat().st_size > 12:
+                    try:
+                        df_metrics = pl.read_parquet(metrics_path)
+                    except Exception as e:
+                        print(f"Failed to read metrics parquet for run_id {run_id}")
+                        continue
                     df_metrics = df_metrics.select(pl.all().implode())
                     df_run = df_run.hstack(df_metrics)
                 stats_l.append(df_run)
                 
             df = pl.concat(stats_l, how="diagonal_relaxed").sort(pl.col("run_id"))
             if refresh:
-                df.write_parquet(self.exp_path / Path(fname))
-                df_nonest = df.pipe(self._resolve_nested)
-                df_nonest.write_csv(self.exp_path / Path(self.results_csv))
-                return df
+                try:
+                    df.write_parquet(self.exp_path / Path(fname))
+                    df_nonest = df.pipe(self._resolve_nested)
+                    df_nonest.write_csv(self.exp_path / Path(self.results_csv))
+                    return df
+                except Exception as e:
+                    print(f"Failed to write results parquet at {self.exp_path / Path(fname)}")
             else:
-                pl.read_parquet(self.exp_path / Path(fname))
+                if (self.exp_path / Path(fname)).stat().st_size > 12:
+                    try:
+                        pl.read_parquet(self.exp_path / Path(fname))
+                    except Exception as e:
+                        print(f"Failed to read results parquet at {self.exp_path / Path(fname)}")
                 return df
 
+# これにはrun_idつくるのが妥当? めんどいけど
 class RunsManager:
     def __init__(self, runs):
         self.runs = runs
@@ -270,17 +262,26 @@ class RunsManager:
     def __getitem__(self, idx):
         return self.runs[idx]
 
-
-class RunViewer(RunManager, PathManager):
-    def __init__(self, exec_path=None, exp_name="exp_default", exp_path=None):
-        PathManager.__init__(self, exec_path, exp_name, exp_path)
+class RunViewer(RunManager):
+    def __init__(self, exp_path):
+        """
+        Args:
+             exp_path: 実験ディレクトリのパス (str or Path)
+             ex) "./exp_tpls/exp_default"
+        """
+        self.exp_path = Path(exp_path).resolve()
+        self.runs_path = self.exp_path / "runs"
         
+        self.run_id = None
+        self.run_path = None
+        self.df_params = None
+        self.df_metrics = None
+        
+        if not self.exp_path.exists():
+            raise FileNotFoundError(f"Experiment path not found: {self.exp_path}")
+
     def fetch_results(self, fname=None, refresh=False):
         return self.ref_results(fname=fname, refresh=refresh)
-
-    def __getitem__(self, item):
-        return Path(self.runs_path / str(item))
-    
 
 def cat_results(exp_paths, refresh=False):
     """

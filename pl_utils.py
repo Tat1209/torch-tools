@@ -154,7 +154,6 @@ def filter_finished_tasks(
     return [t for i, t in enumerate(tasks) if i in remaining_ids]
     
 
-
 class Config:
     def __init__(self, **overrides):
         self.defaults = {

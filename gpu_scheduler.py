@@ -1,16 +1,17 @@
 import os
 import time
-import fcntl
 import itertools
 import multiprocessing
 import traceback
 import pynvml
 import logging
-from typing import Any, IO, Callable, Iterator
+from typing import Any, Callable, Iterator
 from pathlib import Path
 from copy import deepcopy
 from dataclasses import dataclass
 from queue import Empty
+
+from filelock import FileLock, Timeout
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -35,22 +36,6 @@ class TaskResult:
 def generate_tasks_grid(task_func: Callable, config: dict[str | tuple[str, ...], Any]) -> list[tuple[Callable, dict[str, Any]]]:
     """
     設定辞書から直積（Grid Search）または同期（Zip）させたタスクリストを生成します。
-
-    Args:
-        task_func (Callable): 実行する関数。
-        config (dict): パラメータ辞書。キーをタプルにすると値のリストがZip同期されます。
-
-    Returns:
-        list[tuple[Callable, dict]]: (関数, 設定辞書) のタプルリスト。
-
-    Example:
-        >>> def train(args): print(args)
-        >>> conf = {
-        ...     "bs": [16, 32],                       # Grid: 2通り
-        ...     ("model", "lr"): [("A", 0.1), ("B", 0.01)] # Zip: 2通り
-        ... }
-        >>> tasks = generate_tasks_grid(train, conf)
-        >>> # Result: 4 tasks
     """
     sweep_items = []
     fixed = {}
@@ -87,21 +72,21 @@ def get_device(
     lock_path: Path = Path("~/.gpu_locks"),
     lock: bool = True,
     gpu_ids: list[int] | None = None
-) -> tuple[Any, IO] | tuple[None, None]:
+) -> tuple[Any, FileLock] | tuple[None, None]:
     """
-    空いているGPUを探し、ファイルロックを取得して返します。
+    空いているGPUを探し、FileLockを取得して返します。
 
     Args:
         avoid_used (bool): TrueならGPU使用率・メモリも監視する。
         util_th (int): 使用率閾値(%)。これ以下なら選択。
         free_mem_th (float): 空きメモリ閾値(MiB)。これ以上なら選択。
         avoid_locked (bool): TrueならロックファイルがあるGPUを避ける。
-        lock_path (Path): ロックファイルの保存先。
+        lock_path (Path): ロックファイルの保存先ディレクトリ。
         lock (bool): Trueならロックを取得して返す。
         gpu_ids (list[int]): 使用許可するGPU IDリスト。
 
     Returns:
-        tuple: (Deviceオブジェクト, ロックファイルオブジェクト) または (None, None)
+        tuple: (Deviceオブジェクト, FileLockオブジェクト) または (None, None)
     """
     lock_path = lock_path.expanduser()
     lock_path.mkdir(parents=True, exist_ok=True)
@@ -120,6 +105,7 @@ def get_device(
             except pynvml.NVMLError:
                 continue
             
+            # --- 1. GPU負荷チェック ---
             if avoid_used:
                 util = pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
                 free_mem = pynvml.nvmlDeviceGetMemoryInfo(handle).free / (1024 ** 2)
@@ -127,26 +113,29 @@ def get_device(
                 if util > util_th or free_mem < free_mem_th:
                     continue
 
-            lock_file = lock_path / f"gpu_{i}.lock"
-            
-            if avoid_locked and lock_file.exists():
-                try:
-                    with open(lock_file, "w") as f:
-                        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        fcntl.flock(f, fcntl.LOCK_UN)
-                except OSError:
-                    continue
+            # --- 2. ロックファイルの設定 ---
+            # filelockは指定したパスそのものをロックファイルとして扱います
+            lock_file_path = lock_path / f"gpu_{i}.lock"
+            gpu_lock = FileLock(str(lock_file_path))
 
+            # --- 3. ロックの試行 ---
             if lock:
                 try:
-                    f = open(lock_file, "w")
-                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    # timeout=0 でノンブロッキング取得を試みる
+                    gpu_lock.acquire(timeout=0)
+                    
                     Device = type("Device", (object,), {"index": i})
-                    return Device(), f
-                except OSError:
-                    f.close()
+                    return Device(), gpu_lock
+                
+                except Timeout:
+                    # ロック取得失敗（他プロセスが使用中）
                     continue
             else:
+                # ロック機能を使用しない場合（単なる空きチェック）
+                # avoid_locked=True なら、ロックファイルがロック中か確認
+                if avoid_locked and gpu_lock.is_locked:
+                    continue
+                    
                 Device = type("Device", (object,), {"index": i})
                 return Device(), None
 
@@ -214,20 +203,20 @@ def _spawn_worker(
     p.start()
     return p
 
-def _cleanup_finished_processes(running_procs: dict[multiprocessing.Process, IO]):
+def _cleanup_finished_processes(running_procs: dict[multiprocessing.Process, FileLock]):
     """
     [内部関数] 終了したプロセスを整理し、ロックを解放する。
     """
     for p in list(running_procs.keys()):
         if not p.is_alive():
             p.join()
-            lock_handle = running_procs[p]
-            if lock_handle:
+            lock_obj = running_procs[p]
+            if lock_obj:
                 try:
-                    fcntl.flock(lock_handle, fcntl.LOCK_UN)
-                    lock_handle.close()
-                except IOError as e:
-                    logger.warning(f"Failed to close lock: {e}")
+                    lock_obj.release()
+                except Exception as e:
+                    # 既に解放されている場合などの安全策
+                    logger.warning(f"Failed to release lock: {e}")
             del running_procs[p]
 
 def parallel_run(
@@ -242,31 +231,14 @@ def parallel_run(
 ) -> list[TaskResult]:
     """
     GPUリソースを管理しながらタスクを並列実行するスケジューラ。
-
-    Args:
-        tasks (list | Iterator): (関数, 引数) のタプルリスト。
-        max_tasks (int | None): 最大同時実行プロセス数。
-        check_interval (float): 空きGPU探索の間隔(秒)。
-        avoid_used (bool): GPU負荷(util/mem)監視を行うか。
-        util_th (int): 使用率上限(%)。
-        free_mem_th (float): 必要空きメモリ(MiB)。
-        lock_path (Path): ロックファイル保存パス。
-        gpu_ids (list[int]): 使用するGPU ID。
-
-    Returns:
-        list[TaskResult]: 全タスクの実行結果。
-
-    Example:
-        >>> tasks = generate_tasks_grid(my_func, config)
-        >>> results = parallel_run(tasks, max_tasks=4, gpu_ids=[0, 1, 2, 3])
     """
     task_list = list(tasks)
     total_tasks = len(task_list)
     logger.info(f"[Scheduler] Total tasks scheduled: {total_tasks}")
     
-    running_procs: dict[multiprocessing.Process, IO] = {}
+    # 変更: 値の型が IO から FileLock に変わりました
+    running_procs: dict[multiprocessing.Process, FileLock] = {}
     
-    # 【重要】spawnコンテキストでQueueとProcessを生成する（SemLockエラー対策）
     ctx = multiprocessing.get_context('spawn')
     result_queue = ctx.Queue()
     
@@ -290,12 +262,12 @@ def parallel_run(
                 )
                 
                 if res and res[0] is not None:
-                    device, lock_handle = res
+                    device, lock_obj = res  # lock_objはFileLockインスタンス
                     gpu_id = device.index
                     
                     func, args = task_list[task_idx]
                     p = _spawn_worker(ctx, func, args, gpu_id, result_queue)
-                    running_procs[p] = lock_handle
+                    running_procs[p] = lock_obj
                     
                     task_idx += 1
                     logger.info(f"[Scheduler] Assigned GPU {gpu_id}. Progress: {task_idx}/{total_tasks} (Running: {len(running_procs)})")
@@ -313,11 +285,10 @@ def parallel_run(
             if p.is_alive():
                 p.terminate()
                 p.join()
-                lh = running_procs[p]
-                if lh:
+                lock_obj = running_procs[p]
+                if lock_obj:
                     try:
-                        fcntl.flock(lh, fcntl.LOCK_UN)
-                        lh.close()
+                        lock_obj.release()
                     except Exception:
                         pass
         logger.info("[Scheduler] Shutdown complete.")

@@ -51,6 +51,7 @@ class FixRandomDataset(Dataset):
         return 10000
 
 
+
 class PklToDataset(Dataset):
     def __init__(self, pkl_path: str, transform: Optional[Callable] = None, target_transform: Optional[Callable] = None):
         """Pickleファイルからデータを一括ロードするデータセット。
@@ -82,6 +83,7 @@ class PklToDataset(Dataset):
             target = self.target_transform(target)
         
         return data, target
+
 
 
 class TinyImageNet(VisionDataset):
@@ -322,6 +324,8 @@ def fetch_handler(root: str, dataset_id: str, base_ds: Optional[Dataset] = None)
         base_ds = fetch_dataset(root, dataset_id)
     return DatasetHandler.create(dataset_id, root, base_ds)
 
+    return DatasetHandler.create(dataset_id, root, base_ds)
+
 
 def _datasets(root: str, dataset_name: str, download: bool = False) -> Dataset:
     """データセットインスタンス生成の内部ファクトリ。"""
@@ -346,7 +350,9 @@ def _datasets(root: str, dataset_name: str, download: bool = False) -> Dataset:
             return torchvision.datasets.Caltech101(root=root, target_type="category", download=download)
         case "tiny-imagenet_train":
             return TinyImageNet(root=root, train=True, download=download)
+            return TinyImageNet(root=root, train=True, download=download)
         case "tiny-imagenet_val":
+            return TinyImageNet(root=root, train=False, download=download)
             return TinyImageNet(root=root, train=False, download=download)
         case "cars_train":
             return StanfordCars(root=root, split="train", download=download)

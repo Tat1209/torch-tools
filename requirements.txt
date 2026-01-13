@@ -6,4 +6,5 @@ matplotlib
 seaborn
 nvitop
 nvidia-ml-py
+filelock
 # tabular

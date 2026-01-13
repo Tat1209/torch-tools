@@ -324,8 +324,6 @@ def fetch_handler(root: str, dataset_id: str, base_ds: Optional[Dataset] = None)
         base_ds = fetch_dataset(root, dataset_id)
     return DatasetHandler.create(dataset_id, root, base_ds)
 
-    return DatasetHandler.create(dataset_id, root, base_ds)
-
 
 def _datasets(root: str, dataset_name: str, download: bool = False) -> Dataset:
     """データセットインスタンス生成の内部ファクトリ。"""

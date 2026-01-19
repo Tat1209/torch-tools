@@ -235,6 +235,9 @@ class Refiner(LazyPipeline):
         return (nn.Linear,)
 
     def build(self, _inplace=False, dbg=False) -> nn.Module:
+        # フラグをTrueに変更
+        self._is_built = True
+
         # inplaceは未実装．forwardの変換が必要で，新たにnn.Moduleを返す場合，in-placeはできないっぽい．
         target_model = self.model if _inplace else self._check_and_copy()
         model = self._execute(target_model)
@@ -314,17 +317,61 @@ class Refiner(LazyPipeline):
             targets = [targets]
 
         return any(fnmatch.fnmatch(name, t) or fnmatch.fnmatch(name, f"*model.{t}") for t in targets) # model.付きも念のため判定
+    
+    def remove_downsample(self, 
+                          target_layer: List[str] | str, 
+                          halve_stride: bool = False, 
+                          max_times: int | None = None) -> "Refiner":
+        """指定した層のダウンサンプリング（stride > 1）を解除または緩和する。
 
-    def remove_downsample(self, target_layer: List[str] | str) -> "Refiner":
-        def _remove_downsample(model, target_layer=target_layer):
+        Args:
+            target_layer (List[str] | str): 対象とする層の名前（ワイルドカード可）。
+            halve_stride (bool): Trueの場合、strideを1にするのではなく現在の半分にする（最小値1）。
+                Falseの場合、strideを強制的に1にする（Pooling層はIdentityに置換）。
+            max_times (int | None): 適用する最大回数。Noneの場合は制限なし。
+                浅い層（走査順）から優先して適用される。
+
+        Returns:
+            Refiner: パイプラインに追加された自身のインスタンス。
+
+        Examples:
+            >>> # 最初の1つのダウンサンプリング層のみstrideを1にする
+            >>> refiner.remove_downsample("layer*.conv1", max_times=1)
+            
+            >>> # すべてのconv層のstrideを半分にする（例: 4 -> 2, 2 -> 1）
+            >>> refiner.remove_downsample("conv*", halve_stride=True)
+        """
+        def _remove_downsample(model, target_layer=target_layer, halve_stride=halve_stride, max_times=max_times):
+            # 適用回数を管理するカウンタ（nonlocalで参照）
+            count = 0
+
+            def get_new_stride(curr_stride):
+                if isinstance(curr_stride, int):
+                    return max(1, curr_stride // 2) if halve_stride else 1
+                return tuple(max(1, s // 2) if halve_stride else 1 for s in curr_stride)
+
             def policy_fn(name, module: nn.Module) -> nn.Module | None:
+                nonlocal count
+                
+                # 回数制限のチェック
+                if max_times is not None and count >= max_times:
+                    return None
+
                 if self._match_layername(name, target_layer):
+                    # Conv層の処理
                     if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+                        new_stride = get_new_stride(module.stride)
+                        
+                        # 変更がない場合はスキップ
+                        if new_stride == module.stride:
+                            return None
+                        
+                        count += 1
                         return module.__class__(
                             in_channels=module.in_channels,
                             out_channels=module.out_channels,
                             kernel_size=module.kernel_size,
-                            stride=1,
+                            stride=new_stride,
                             padding=module.padding,
                             dilation=module.dilation,
                             groups=module.groups,
@@ -333,12 +380,36 @@ class Refiner(LazyPipeline):
                             device=module.weight.device,
                             dtype=module.weight.dtype,
                         )
-                    elif isinstance(module, (nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d)):
-                        return nn.Identity()
+                    
+                    # Pooling層の処理
+                    elif isinstance(module, (nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, 
+                                             nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d)):
+                        if not halve_stride:
+                            # 強制削除
+                            count += 1
+                            return nn.Identity()
+                        else:
+                            # ストライド半減
+                            new_stride = get_new_stride(module.stride)
+                            if new_stride == module.stride:
+                                return None
+                            
+                            count += 1
+                            # プーリング層の再構築（パラメータを持たないためシンプル）
+                            return module.__class__(
+                                kernel_size=module.kernel_size,
+                                stride=new_stride,
+                                padding=module.padding,
+                                ceil_mode=module.ceil_mode,
+                                count_include_pad=getattr(module, "count_include_pad", True), # AvgPool用
+                                dilation=getattr(module, "dilation", 1), # MaxPool用
+                            )
+                return None
 
             self.apply_policies(model, policy_fn, full_path=True)
+            return model
 
-        return self.pipe(_remove_downsample, target_layer=target_layer)
+        return self.pipe(_remove_downsample, target_layer=target_layer, halve_stride=halve_stride, max_times=max_times)
 
     def kernel_size_adjust(self, target_layer: List[str] | str, to_size: int, padding: int | None = None) -> "Refiner":
         if padding is None:
@@ -366,7 +437,7 @@ class Refiner(LazyPipeline):
         return self.pipe(_kernel_size_adjust, target_layer=target_layer)
 
     def cifar_style(self, arch: Literal["auto", "resnet", "regnet", "mobilenet", "efficientnet", "convnext"] = "auto") -> "Refiner":
-        # 必ず最初に適用すること．full_pathがの完全一致で判定するため，ラップされてからだとmatchしない．（一応，_match_layernameにmodel.も同時に判定する．）
+        # 必ず最初に適用すること．full_pathが完全一致で判定するため，ラップされてからだとmatchしない．（一応，_match_layernameにmodel.も同時に判定する．）
         # CIFAR画像を入力した際，4x4の特徴マップがGAPに入るように調整する
         if arch == "auto":
             arch = self.get_arch()
@@ -385,6 +456,82 @@ class Refiner(LazyPipeline):
 
         if arch in ("convnext"):
             return self.remove_downsample(["features.0.0"]).kernel_size_adjust("features.0.0", to_size=3, padding=1)
+        return self
+
+    def adapt_structure(self, target: str, arch: Literal["auto", "resnet", "regnet", "mobilenet", "efficientnet", "convnext"] = "auto") -> "Refiner":
+        """データセット名または解像度区分に基づき、初期層のダウンサンプリング構造を変更する。
+        # 必ず最初に適用すること．full_pathが完全一致で判定するため，multi_narrow()などでラップされてからだとpathが変更されてmatchしないリスクあり．
+
+        Args:
+            target (str): データセット名 (例: "cifar10_train", "stanford-cars_train")
+                          または解像度区分 ("low", "mid", "default")。
+                          - low: 32px~64px (CIFAR, Tiny-ImageNet, MNIST, SVHN)
+                          - mid: 96px (STL-10)
+                          - default: 224px~ (Caltech, CUB, Flowers, Oxford-Pet, Stanford-Cars)
+            arch (str, optional): アーキテクチャ名。デフォルトは "auto"。
+
+        Returns:
+            Refiner: 設定適用後のインスタンス。
+
+        Example:
+            >>> Refiner(model).adapt_structure("tiny-imagenet_train").build()
+            >>> Refiner(model).adapt_structure("stanford-cars_val").build() # 変更なし
+        """
+        t = target.lower()
+        if arch == "auto":
+            arch = self.get_arch()
+
+        # --- 判定用キーワード定義 ---
+        # 32x32 ~ 64x64
+        # "mnist" は "fashion-mnist" にもヒットするため包括可能だが、明示的に記述
+        low_res_keys = ["low", "cifar", "svhn", "tiny-imagenet", "mnist", "fashion-mnist"]
+        
+        # 96x96
+        mid_res_keys = ["mid", "stl10"]
+
+        # --- Mode 1: Low Resolution (Stride 1) ---
+        if any(k in t for k in low_res_keys):
+            
+            if arch == "resnet":
+                return self.remove_downsample(["conv1", "maxpool"]).kernel_size_adjust("conv1", to_size=3, padding=1)
+            
+            if arch == "regnet":
+                return self.remove_downsample(["stem.0", "trunk_output.block1.block1-0.*"])
+            
+            if arch in ("mobilenet", "efficientnet"):
+                # Stemと最初のBlockの両方でダウンサンプルを削除
+                stem = "features.0.0"
+                block = "features.2.conv.0.0" if arch == "mobilenet" else "features.2.0.block.1.0"
+                return self.remove_downsample([stem, block])
+            
+            if arch == "convnext":
+                return self.remove_downsample(["features.0.0"], halve_stride=False)\
+                           .kernel_size_adjust("features.0.0", to_size=3, padding=1)
+
+        # --- Mode 2: Mid Resolution (Stride 2) ---
+        elif any(k in t for k in mid_res_keys):
+            
+            if arch == "resnet":
+                # MaxPoolのみ削除し、conv1のstride=2は維持
+                return self.remove_downsample(["maxpool"])\
+                           .kernel_size_adjust("conv1", to_size=3, padding=1)
+            
+            if arch == "regnet":
+                return self.remove_downsample(["trunk_output.block1.block1-0.*"])
+            
+            if arch in ("mobilenet", "efficientnet"):
+                # 2段階目のダウンサンプルのみ削除
+                block = "features.2.conv.0.0" if arch == "mobilenet" else "features.2.0.block.1.0"
+                return self.remove_downsample([block])
+            
+            if arch == "convnext":
+                # stride 4 -> 2
+                return self.remove_downsample(["features.0.0"], halve_stride=True)\
+                           .kernel_size_adjust("features.0.0", to_size=3, padding=1)
+
+        # --- Mode 3: Default / High Resolution ---
+        # 対象: 224x224+
+        # caltech101, cub200, flowers102, oxford-pet, stanford-cars などはここに含まれる
         return self
 
     def _apply_init(self, m: nn.Module, init_func: Callable[[Tensor], None], **kwargs):
@@ -476,6 +623,7 @@ class Refiner(LazyPipeline):
                 )
             return "unknown"
 
+            
 
 def comp_param_stat(models: List, layer_width=30):
     """
@@ -591,3 +739,4 @@ def comp_param_stat(models: List, layer_width=30):
         print(SEPARATOR.join(row_str_list))
     
     print(SEPARATOR.join(separator_line_list))
+

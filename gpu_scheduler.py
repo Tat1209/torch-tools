@@ -229,9 +229,22 @@ def parallel_run(
     lock_path: Path = Path("~/.gpu_locks"),
     gpu_ids: list[int] | None = None
 ) -> list[TaskResult]:
+    """GPUリソースを管理しながらタスクを並列実行するスケジューラ。
+
+    Args:
+        tasks: 実行関数のタプル (callable, args) のリストまたはイテレータ。
+        max_tasks: 同時実行する最大タスク数。Noneの場合は制限なし。
+        check_interval: GPUの空き状況を確認するポーリング間隔（秒）。
+        avoid_used: 他のプロセスが使用中のGPUを回避するかどうか。
+        util_th: GPU使用率がこの値（%）以下であれば空きとみなす。
+        free_mem_th: 空きメモリがこの値（MiB）以上あれば空きとみなす。
+        lock_path: 排他制御用ロックファイルを配置するパス。
+        gpu_ids: 使用対象とするGPUデバイスIDのリスト。
+
+    Returns:
+        list[TaskResult]: 各タスクの実行結果（成否、戻り値、エラーメッセージ等）を含むオブジェクトのリスト。
     """
-    GPUリソースを管理しながらタスクを並列実行するスケジューラ。
-    """
+
     task_list = list(tasks)
     total_tasks = len(task_list)
     logger.info(f"[Scheduler] Total tasks scheduled: {total_tasks}")

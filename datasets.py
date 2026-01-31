@@ -1,32 +1,17 @@
 import os
 import pickle
 from pathlib import Path
-from typing import Optional, Callable, Any
+from typing import Any, Callable, Optional
 
+import numpy as np
 import torch
 import torchvision
-from PIL import Image
-from torch.utils.data import Dataset, ConcatDataset
-from torchvision.datasets.vision import VisionDataset
-from torchvision.datasets.utils import download_and_extract_archive
-from filelock import FileLock
-
 from dataset_handler import DatasetHandler
-
-
-class FixRandomDataset(Dataset):
-    def __init__(self, size: int):
-        super().__init__()
-        torch.manual_seed(42)
-        self.data = torch.rand(size)
-
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
-        data = self.data.detach().clone()
-        target = index
-        return data, target
-
-    def __len__(self) -> int:
-        return 10000
+from filelock import FileLock
+from PIL import Image
+from torch.utils.data import ConcatDataset, Dataset
+from torchvision.datasets.utils import download_and_extract_archive
+from torchvision.datasets.vision import VisionDataset
 
 
 class PklToDataset(Dataset):
@@ -172,6 +157,7 @@ class StanfordCars(torchvision.datasets.StanfordCars):
             print(f"Downloading {filename}...")
             download_and_extract_archive(url, download_root=self.root, filename=filename)
             
+
 class CUB200(VisionDataset):
     """
     Caltech-UCSD Birds-200-2011 Dataset
@@ -259,6 +245,96 @@ class CUB200(VisionDataset):
         )
 
 
+class CIFAR10C(VisionDataset):
+    url = "https://zenodo.org/record/2535967/files/CIFAR-10-C.tar.gz"
+    filename = "CIFAR-10-C.tar.gz"
+    base_folder = "CIFAR-10-C"
+    md5 = "561e08f6545a29482931168d9dd78225"
+
+    def __init__(self, root: str, corruption: str, transform: Optional[Callable] = None, target_transform: Optional[Callable] = None, download: bool = False):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self.root = Path(root)
+        self.corruption = corruption
+        self.base_path = self.root / self.base_folder
+
+        if download:
+            self._download()
+
+        if not self._check_integrity():
+            raise RuntimeError("Dataset not found. You can use download=True to download it.")
+
+        self.data = np.load(self.base_path / f"{corruption}.npy")
+        self.targets = np.load(self.base_path / "labels.npy")
+
+    def __getitem__(self, index: int) -> tuple[Any, Any]:
+        img, target = self.data[index], self.targets[index % 10000]  # Labels are repeated for each severity (5 levels)
+
+        img = Image.fromarray(img)
+
+        if self.transform:
+            img = self.transform(img)
+        if self.target_transform:
+            target = self.target_transform(target)
+
+        return img, int(target)
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def _check_integrity(self) -> bool:
+        return (self.base_path / "labels.npy").exists()
+
+    def _download(self) -> None:
+        if self._check_integrity():
+            return
+        download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.md5)
+
+
+class CIFAR100C(VisionDataset):
+    url = "https://zenodo.org/record/3555552/files/CIFAR-100-C.tar.gz"
+    filename = "CIFAR-100-C.tar.gz"
+    base_folder = "CIFAR-100-C"
+    md5 = "11f0ed0f1191cb99b231a9809fa73995"
+
+    def __init__(self, root: str, corruption: str, transform: Optional[Callable] = None, target_transform: Optional[Callable] = None, download: bool = False):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self.root = Path(root)
+        self.corruption = corruption
+        self.base_path = self.root / self.base_folder
+
+        if download:
+            self._download()
+
+        if not self._check_integrity():
+            raise RuntimeError("Dataset not found. You can use download=True to download it.")
+
+        self.data = np.load(self.base_path / f"{corruption}.npy")
+        self.targets = np.load(self.base_path / "labels.npy")
+
+    def __getitem__(self, index: int) -> tuple[Any, Any]:
+        img, target = self.data[index], self.targets[index % 10000]
+
+        img = Image.fromarray(img)
+
+        if self.transform:
+            img = self.transform(img)
+        if self.target_transform:
+            target = self.target_transform(target)
+
+        return img, int(target)
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def _check_integrity(self) -> bool:
+        return (self.base_path / "labels.npy").exists()
+
+    def _download(self) -> None:
+        if self._check_integrity():
+            return
+        download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.md5)
+
+
 class TestDataset(Dataset):
     def __init__(self, path: str, transform: Optional[Callable] = None, target_transform: Optional[Callable] = None):
         self.root = Path(path).parent
@@ -308,73 +384,82 @@ def fetch_handler(root: str, dataset_id: str, base_ds: Optional[Dataset] = None)
 
 def _datasets(root: str, dataset_name: str, download: bool = False) -> Dataset:
     match dataset_name:
-        # --- Basic / Low Res ---
         case "mnist_train":
             return torchvision.datasets.MNIST(root=root, train=True, download=download)
-        case "mnist_val":
+        case "mnist_test":
             return torchvision.datasets.MNIST(root=root, train=False, download=download)
-        
+
         case "fashion-mnist_train":
             return torchvision.datasets.FashionMNIST(root=root, train=True, download=download)
-        case "fashion-mnist_val":
+        case "fashion-mnist_test":
             return torchvision.datasets.FashionMNIST(root=root, train=False, download=download)
-        
-        case "svhn_train":
-            return torchvision.datasets.SVHN(root=root, split="train", download=download)
-        case "svhn_val":
-            return torchvision.datasets.SVHN(root=root, split="test", download=download)
-        
+
         case "cifar10_train":
             return torchvision.datasets.CIFAR10(root=root, train=True, download=download)
-        case "cifar10_val":
+        case "cifar10_test":
             return torchvision.datasets.CIFAR10(root=root, train=False, download=download)
-            
+
         case "cifar100_train":
             return torchvision.datasets.CIFAR100(root=root, train=True, download=download)
-        case "cifar100_val":
+        case "cifar100_test":
             return torchvision.datasets.CIFAR100(root=root, train=False, download=download)
 
-        # --- Mid Res ---
+        case "svhn_train":
+            return torchvision.datasets.SVHN(root=root, split="train", download=download)
+        case "svhn_test":
+            return torchvision.datasets.SVHN(root=root, split="test", download=download)
+
         case "stl10_train":
             return torchvision.datasets.STL10(root=root, split="train", download=download)
-        case "stl10_val":
+        case "stl10_test":
             return torchvision.datasets.STL10(root=root, split="test", download=download)
-        
-        case "tiny-imagenet_train":
-            return TinyImageNet(root=root, train=True, download=download)
-        case "tiny-imagenet_val":
-            return TinyImageNet(root=root, train=False, download=download)
+        case "stl10_unlabeled":
+            return torchvision.datasets.STL10(root=root, split="unlabeled", download=download)
 
-        # --- High Res / Fine-Grained ---
-        case "caltech101_trainval":
-            # Caltech101は公式にはsplitがないため、通常は全データを読み込んでからSubset等で分割する
-            return torchvision.datasets.Caltech101(root=root, target_type="category", download=download)
-        
-        case "stanford-cars_train":  # cars -> stanford-cars
+        case "stanford-cars_train":
             return torchvision.datasets.StanfordCars(root=root, split="train", download=download)
-        case "stanford-cars_val":    # リスト上の _val を実際の split="test" にマップ
+        case "stanford-cars_test":
             return torchvision.datasets.StanfordCars(root=root, split="test", download=download)
-        
-        case "oxford-pet_trainval":  # oxfordpet -> oxford-pet
+
+        case "oxford-pet_train":
             return torchvision.datasets.OxfordIIITPet(root=root, split="trainval", target_types="category", download=download)
-        case "oxford-pet_val":       # リスト上の _val を実際の split="test" にマップ
+        case "oxford-pet_test":
             return torchvision.datasets.OxfordIIITPet(root=root, split="test", target_types="category", download=download)
-        
-        case "flowers102_train":     # flowers -> flowers102
+
+        case "cub200_train":
+            return CUB200(root=root, train=True, download=download)
+        case "cub200_test":
+            return CUB200(root=root, train=False, download=download)
+
+        case "flowers102_train":
             return torchvision.datasets.Flowers102(root=root, split="train", download=download)
         case "flowers102_val":
             return torchvision.datasets.Flowers102(root=root, split="val", download=download)
-        case "flowers102_test":      # 必要であれば test も定義
+        case "flowers102_test":
             return torchvision.datasets.Flowers102(root=root, split="test", download=download)
-            
-        case "cub200_train":         # cub -> cub200
-            return CUB200(root=root, train=True, download=download)
-        case "cub200_val":
-            return CUB200(root=root, train=False, download=download)
-            
+
+        case "tiny-imagenet_train":
+            return TinyImageNet(root=root, train=True, download=download)
+        case "tiny-imagenet_test":
+            return TinyImageNet(root=root, train=False, download=download)
+
+        case "imagenet_train":
+            return torchvision.datasets.ImageNet(root=root, split="train")
         case "imagenet_val":
             return torchvision.datasets.ImageNet(root=root, split="val")
-            
+        case "imagenet_test":
+            return torchvision.datasets.ImageNet(root=root, split="test")
+
+        case "caltech101_labeled":
+            return torchvision.datasets.Caltech101(root=root, target_type="category", download=download)
+        
+        case _ if dataset_name.startswith("cifar10_c_"):
+            return CIFAR10C(root=root, corruption=dataset_name.replace("cifar10_c_", ""), download=download)
+
+        case _ if dataset_name.startswith("cifar100_c_"):
+            return CIFAR100C(root=root, corruption=dataset_name.replace("cifar100_c_", ""), download=download)
+
         case _:
             raise ValueError(f"Invalid dataset name: {dataset_name}")
+        
         
